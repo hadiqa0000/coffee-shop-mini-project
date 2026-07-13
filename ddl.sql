@@ -12,6 +12,8 @@ CREATE TABLE Employee(
     employee_first_name VARCHAR(20) NOT NULL,
     employee_middle_name VARCHAR(20) NULL,
     employee_last_name VARCHAR(20) NOT NULL,
+    employee_gender VARCHAR(10) NOT NULL, CHECK(employee_gender IN('male', 'female', 'intersex')),
+    employee_dob DATE NO NULL,
     employee_role VARCHAR(20) NOT NULL CHECK (employee_role IN ('cashier','manager','barista')),
     employee_hire_date DATE NOT NULL,
     employee_status VARCHAR(15) NOT NULL DEFAULT 'active' CHECK(employee_status IN('active', 'suspended', 'inactive')),
