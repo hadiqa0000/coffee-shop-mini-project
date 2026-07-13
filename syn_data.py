@@ -42,28 +42,11 @@ class CoffeeShop:
 
 
 
-def generate_address() -> Address:
-
-	city = random.choice(list(TURKIYE_GEOGRAPHY.keys()))
-	district = random.choice(TURKIYE_GEOGRAPHY[city])
-	building_no = str(random.randint(1,120))
-	street_no = str(random.randint(1,180))
-
-	return Address( 
-	building_no = building_no,
-	street_no = street_no,
-	district = district,
-	city = city
-) 
-
-for _ in range(3):
-    addr = generate_address()
-    print(addr.to_string())
 
 
 
 
-generated_address = set()
+generated_addresses = set()
 
 def generate_unique_address() -> Address:
     while True:
@@ -74,10 +57,10 @@ def generate_unique_address() -> Address:
         street_no = str(random.randint(1, 180))
         
         
-        address_token = (street_no, building_no, district, city)
+        address_token = (street_no, building_no, district, city) #a combination of steet no building no district and city
         
        
-        if address_token not in generated_address:
+        if address_token not in generated_addresses:
             
             generated_address.add(address_token)
             
@@ -91,13 +74,46 @@ def generate_unique_address() -> Address:
 
 SHOP_SUFFIXES = ["Shop", "Cafe", "Coffee", "Roasters", "Corner"]
 
+generated_shop_name = set()
+
 def generate_shop_name() -> str:
-   
+    while True:
     owner_name = fake.first_name() 
     suffix = random.choice(SHOP_SUFFIXES)
     
+   
     
     if owner_name.endswith('s'):
-        return f"{owner_name}' {suffix}"
-    return f"{owner_name}'s {suffix}"
-
+        name_candidate = f"{owner_name}' {suffix}"
+        else:
+            name_candidate = f"{owner_name}'s {suffix}"
+            
+            
+    if name_candidate not in generated_shop_name():
+    	generated_shop_name.add(candidate_name)
+    	return candidate_name
+    	
+    	
+    	
+    	
+def generate_coffee_shop() -> CoffeeShop:
+    
+    shop_name = generate_unique_shop_name()
+    shop_address = generate_unique_address()
+    shop_phone = generate_unique_phone()
+    
+  
+    start_date = date(1950, 1, 1)
+    end_date = date(2026, 1, 1)
+    random_days = random.randint(0, (end_date - start_date).days)
+    shop_opened_at = start_date + timedelta(days=random_days)
+    
+    return CoffeeShop(
+        shop_name=shop_name,
+        shop_address=shop_address,
+        shop_phone=shop_phone,
+        shop_opened_at=shop_opened_at
+    )
+    	
+    	
+    
