@@ -1,0 +1,42 @@
+from dataclasses import dataclass
+from datetime import date
+import random
+
+
+GLOBAL_SEED = 42
+random.seed(GLOBAL_SEED)
+
+CURRENT_YEAR = datetime.date.today().year 
+
+
+TURKIYE_GEOGRAPHY = {
+    "Istanbul": ["Kadikoy", "Besiktas", "Fatih", "Uskudar", "Sisli", "Sariyer", "Avcilar"],
+    "Ankara": ["Cankaya", "Keçiören", "Yenimahalle", "Etimesgut"],
+    "Izmir": ["Karsiyaka", "Konak", "Bornova", "Buca"],
+}
+
+
+@dataclass
+class Address:
+    building_no: str
+    street_no: str
+    district: str
+    city: str
+    country: str = "Turkiye"
+    
+    def to_string(self) -> str:
+        
+        return f"Sk. {self.street_no}, No: {self.building_no}, {self.district}/{self.city}, {self.country}"
+
+
+@dataclass 
+
+class CoffeeShop:
+shop_name : str
+shop_address : str
+shop_phone : str
+shop_opened_at: datetime.date
+
+
+
+

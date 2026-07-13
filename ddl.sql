@@ -3,6 +3,7 @@ CREATE TABLE CoffeeShop(
     shop_name VARCHAR(30) NOT NULL,
     shop_address VARCHAR(255) NOT NULL,
     shop_phone VARCHAR(11) NOT NULL,
+    shop_opened_at DATE NOT NULL,
     PRIMARY KEY(shop_id)
 );
 
@@ -16,9 +17,9 @@ CREATE TABLE Employee(
     employee_dob DATE NO NULL,
     employee_role VARCHAR(20) NOT NULL CHECK (employee_role IN ('cashier','manager','barista')),
     employee_hire_date DATE NOT NULL,
-    employee_status VARCHAR(15) NOT NULL DEFAULT 'active' CHECK(employee_status IN('active', 'suspended', 'inactive')),
+    employee_current_status VARCHAR(15) NOT NULL DEFAULT 'active' CHECK(employee_current_status IN('active', 'suspended', 'inactive')),
     PRIMARY KEY(shop_id, employee_id),
-    FOREIGN KEY (shop_id) REFERENCES CoffeeShop(shop_id)
+    FOREIGN KEY (shop_id) REFERENCES CoffeeShop(shop_id) ON DELETE CASCADE
 ); 
 
 CREATE TABLE Product(
@@ -29,7 +30,7 @@ CREATE TABLE Product(
     product_current_price DECIMAL(12,2) NOT NULL CHECK(product_current_price >= 0),
     product_is_available BOOLEAN NOT NULL,
     PRIMARY KEY(shop_id, product_id),
-    FOREIGN KEY (shop_id) REFERENCES CoffeeShop(shop_id)
+    FOREIGN KEY (shop_id) REFERENCES CoffeeShop(shop_id) ON DELETE CASCADE
 );
 
 CREATE TABLE Orders(
@@ -43,7 +44,7 @@ CREATE TABLE Orders(
     order_total DECIMAL(15,2) NOT NULL,
     CONSTRAINT chk_total CHECK (order_total = order_subtotal + order_tax),
     PRIMARY KEY(shop_id, order_id),
-    FOREIGN KEY(shop_id) REFERENCES CoffeeShop(shop_id),
+    FOREIGN KEY(shop_id) REFERENCES CoffeeShop(shop_id) ON DELETE CASCADE,
     FOREIGN KEY (shop_id, employee_id) REFERENCES Employee(shop_id, employee_id)
 );
 
@@ -56,18 +57,18 @@ CREATE TABLE OrderItem(
     unit_price DECIMAL(12,2) NOT NULL CHECK(unit_price >= 0),
     line_total DECIMAL(12,2) NOT NULL CHECK(line_total = quantity * unit_price),
     PRIMARY KEY(shop_id, order_item_id),
-    FOREIGN KEY(shop_id, order_id) REFERENCES Orders(shop_id, order_id),
-    FOREIGN KEY(shop_id, product_id) REFERENCES Product(shop_id, product_id)
+    FOREIGN KEY(shop_id, order_id) REFERENCES Orders(shop_id, order_id) ON DELETE CASCADE,
+    FOREIGN KEY(shop_id, product_id) REFERENCES Product(shop_id, product_id) ON DELETE CASCADE
 );
 
 CREATE TABLE Payment(
     payment_id BIGINT GENERATED ALWAYS AS IDENTITY,
     shop_id BIGINT NOT NULL,
     order_id BIGINT NOT NULL,
-    paid_at TIMESTAMP NULL,
+    paid_at TIMESTAMP NULL, --cannot be before shop_opened_at
     payment_method VARCHAR(20) CHECK (payment_method IN ('cash', 'card')),
     payment_status VARCHAR(20) DEFAULT 'completed' CHECK(payment_status IN('pending', 'completed', 'cancelled')),
-    amount DECIMAL(12,2) NOT NULL,
+    amount DECIMAL(12,2) NOT NULL, --should be equal to order_total
     PRIMARY KEY(shop_id, payment_id),
-    FOREIGN KEY(shop_id, order_id) REFERENCES Orders(shop_id, order_id)
+    FOREIGN KEY(shop_id, order_id) REFERENCES Orders(shop_id, order_id) ON DELETE CASCADE
 );
