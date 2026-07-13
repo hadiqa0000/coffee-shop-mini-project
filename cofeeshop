@@ -1,6 +1,0 @@
-image processing contrast enhancement rescale rotation  single instruction multiple data
-
-
-find an image that is good enough, aorund 4mb. copy and paste it 1000 times then do a parent thread
-so if we have 1000 images and 10 child threads, every child will rotate 10 of those 
-
