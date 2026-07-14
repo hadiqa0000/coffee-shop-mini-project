@@ -3,6 +3,7 @@ import datetime
 from datetime import date, timedelta
 import random
 from faker import Faker
+from typing import Optional
 
 fake = Faker('tr_TR')
 
@@ -17,6 +18,7 @@ TURKIYE_GEOGRAPHY = {
 
 @dataclass
 class Address:
+    shop_id : int
     building_no: str
     street_no: str
     district: str
@@ -24,7 +26,7 @@ class Address:
     country: str = "Turkiye"
     
     def to_string(self) -> str:
-        return f"Sk. {self.street_no}, No: {self.building_no}, {self.district}/{self.city}, {self.country}"
+        return f"Sk. {self.street_no}, bina: {self.building_no}, {self.district}/{self.city}, {self.country}"
 
 @dataclass 
 class CoffeeShop:
@@ -83,7 +85,7 @@ def generate_unique_phone() -> str:
             generated_phones.add(phone)
             return phone
 
-def generate_coffee_shop() -> CoffeeShop:
+def generate_coffee_shop(shop_index:int) -> CoffeeShop:
     shop_name = generate_unique_shop_name()
     shop_address = generate_unique_address()
     shop_phone = generate_unique_phone()
@@ -94,11 +96,32 @@ def generate_coffee_shop() -> CoffeeShop:
     shop_opened_at = start_date + timedelta(days=random_days)
     
     return CoffeeShop(
+        shop_id=f"{shop_index:10d}
         shop_name=shop_name,
         shop_address=shop_address,
         shop_phone=shop_phone,
         shop_opened_at=shop_opened_at
     )
+    
+    
+    
+@dataclass Employee
+shop_id : int
+employee_first_name : str
+ employee_last_name : str
+employee_middle_name: Optional[str] = None
+employee_gender : str
+employee_dob : date 
+employee_role : str
+employee_hire_date : date
+employee_current_status : str
+
+
+
+
+
+
+
 
 # Quick verification test
 if __name__ == "__main__":
