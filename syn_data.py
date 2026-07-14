@@ -190,6 +190,17 @@ def allocate_roles_for_shop(total_employees: int) -> list[str]:
 
 
 
+def generate_employee_hire_date(shop_opened_at: date) -> date:
+    
+   today = date.today()
+   window_in_days = (today - shop_opened_at).days
+    if window_in_days <= 0:
+        return shop_opened_at
+        random_days_to_add = random.randint(0, window_in_days)
+    hire_date = shop_opened_at + timedelta(days=random_days_to_add)
+    return hire_date
+
+
 
 
 # Quick verification test
