@@ -160,23 +160,33 @@ def generate_employee_surname_name() -> str:
 
 def generate_employee_dob(employee_hire_date : date) -> date:
     while True:
-       
-        
         age_in_years = random.gauss(23.0, 4.5)
-        
-        
         if age_in_years >= 16.0:
             break
-            
-    
-    age_in_days = int(age_in_years * 365.25)
-    
-    
+        age_in_days = int(age_in_years * 365.25)
     dob = hire_date - timedelta(days=age_in_days)
     return dob
 
+def determine_shop_capacity() -> int:
+   capacity = int(random.gauss(6.0, 2.0))
+    return max(3, min(capacity, 12))
 
 
+def allocate_roles_for_shop(total_employees: int) -> list[str]:
+    roles = []
+    if total_employees >= 8:
+        roles.extend(['manager', 'manager']) 
+    else:
+        roles.append('manager')  
+      remaining_slots = total_employees - len(roles)
+    pool_options = ['barista', 'cashier']
+    pool_weights = [0.65, 0.35]
+    
+    allocated_staff = random.choices(pool_options, weights=pool_weights, k=remaining_slots)
+    roles.extend(allocated_staff)
+    
+    random.shuffle(roles)
+    return roles
 
 
 
