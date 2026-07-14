@@ -18,7 +18,6 @@ TURKIYE_GEOGRAPHY = {
 
 @dataclass
 class Address:
-    
     building_no: str
     street_no: str
     district: str
@@ -108,14 +107,73 @@ def generate_coffee_shop(shop_index:int) -> CoffeeShop:
     
 @dataclass Employee
 shop_id : int
-employee_first_name : str
- employee_last_name : str
-employee_middle_name: Optional[str] = None
-employee_gender : str
-employee_dob : date 
-employee_role : str
-employee_hire_date : date
-employee_current_status : str
+    employee_first_name : str
+    employee_surname_name : str
+    employee_middle_name: Optional[str] = None
+    employee_gender : str
+    employee_dob : date 
+    employee_role : str
+    employee_hire_date : date
+    employee_current_status : str
+
+EMPLOYEE_GENDER = ['Female', 'Male', 'Intersex']
+gender = random.choices(GENDERS, weights=[51.90, 47.2, 1.7], k=1)[0]
+
+def generate_employee_first_name() ->str:
+        
+        
+        if gender == 'Male'
+        first_name = fake.first_name_male() 
+        
+        if gender == 'Female'
+        first_name = fake.first_name_female()
+        
+        
+        else:
+        first_name = fake.first_name()
+        
+        
+        return gender, first_name
+def generate_employee_middle_name()->str:
+       if gender == 'Male'
+        middle_name = fake.first_name_male() 
+        
+       if gender == 'Female'
+       middle_name == fake.first_name_female()
+       
+       else:
+       middle_name == fake.first_name()
+       
+       return middle_name
+       
+     #rules to implement later
+     ##in the faker,since we're using first_name builtin function, the name for the second and first name (defined funcitons) cannot be the same 
+     
+     #not the whole population will have middlenames, there will be a specific percentage of people who will have middle names 
+     #maybe i can do random choices when generating middlenames inthe generate employee loop with a weighted percentage list
+def generate_employee_surname_name() -> str:
+       surname = fake.last_name():
+       
+       return surname
+
+      
+
+def generate_employee_dob(employee_hire_date : date) -> date:
+    while True:
+       
+        
+        age_in_years = random.gauss(23.0, 4.5)
+        
+        
+        if age_in_years >= 16.0:
+            break
+            
+    
+    age_in_days = int(age_in_years * 365.25)
+    
+    
+    dob = hire_date - timedelta(days=age_in_days)
+    return dob
 
 
 

@@ -12,7 +12,7 @@ CREATE TABLE Employee(
     shop_id BIGINT NOT NULL,
     employee_first_name VARCHAR(20) NOT NULL,
     employee_middle_name VARCHAR(20) NULL,
-    employee_last_name VARCHAR(20) NOT NULL,
+    employee_surname_name VARCHAR(20) NOT NULL,
     employee_gender VARCHAR(10) NOT NULL, CHECK(employee_gender IN('male', 'female', 'intersex')),
     employee_dob DATE NO NULL,
     employee_role VARCHAR(20) NOT NULL CHECK (employee_role IN ('cashier','manager','barista', 'waiter')),
