@@ -18,7 +18,7 @@ TURKIYE_GEOGRAPHY = {
 
 @dataclass
 class Address:
-    shop_id : int
+    
     building_no: str
     street_no: str
     district: str
@@ -30,6 +30,7 @@ class Address:
 
 @dataclass 
 class CoffeeShop:
+    shop_id : int
     shop_name: str
     shop_address: Address  
     shop_phone: str
