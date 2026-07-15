@@ -1,3 +1,4 @@
+from __future__ import annotations
 from dataclasses import dataclass
 import datetime 
 from datetime import date, timedelta
@@ -5,6 +6,8 @@ import random
 from faker import Faker
 from typing import Optional, List
 import math
+
+
 
 fake = Faker('tr_TR')
 
@@ -338,32 +341,112 @@ def generate_shop_products(shop: CoffeeShop, total_employees: int) -> list[Produ
                     product_is_available=is_available
                 )
                 shop_products.append(new_product)
-     return shop_products   
+                
+                
+    return shop_products   
+    
+    
+    
+    
+def generate_shop_staff(shop: CoffeeShop) -> List[Employee]:
+    """
+    Generates employees for a shop, ensuring strict active staff minimums:
+    - At least 1 Active Manager (Max 3)
+    - At least 1 Active Barista (Max 6)
+    - At least 1 Active Cashier (Max 4)
+    - At least 1 Active Waiter (Max 6)
+    
+    It will keep hiring (generating) employees until these conditions are met.
+    """
+    all_employees: List[Employee] = []
+    
+    # Define our targets for ACTIVE staff
+    # We will randomly choose a target capacity for this shop within your limits
+    target_active_managers = random.randint(1, 3)
+    target_active_baristas = random.randint(1, 6)
+    target_active_cashiers = random.randint(1, 4)
+    target_active_waiters = random.randint(1, 6)
+    
+    # It is rare to have only 1 of everything, so let's make sure that if 
+    # everything rolled a 1, we occasionally boost them to make it look natural
+    if (target_active_managers == 1 and target_active_baristas == 1 and 
+        target_active_cashiers == 1 and target_active_waiters == 1):
+        if random.random() < 0.85: # 85% of the time, boost some roles
+            target_active_baristas = random.randint(2, 4)
+            target_active_waiters = random.randint(2, 4)
+
+    # We track how many ACTIVE employees of each role we currently have
+    active_counts = {
+        'manager': 0,
+        'barista': 0,
+        'cashier': 0,
+        'waiter': 0
+    }
+    
+    # We keep hiring until all our active targets are satisfied
+    while (active_counts['manager'] < target_active_managers or
+           active_counts['barista'] < target_active_baristas or
+           active_counts['cashier'] < target_active_cashiers or
+           active_counts['waiter'] < target_active_waiters):
+        
+        # Decide which role we need to hire next
+        needed_roles = [role for role, target in {
+            'manager': target_active_managers,
+            'barista': target_active_baristas,
+            'cashier': target_active_cashiers,
+            'waiter': target_active_waiters
+        }.items() if active_counts[role] < target]
+        
+        # Hire for one of the missing roles
+        chosen_role = random.choice(needed_roles)
+        new_emp = generate_employee(shop, chosen_role)
+        all_employees.append(new_emp)
+        
+        # If the newly hired employee rolled an 'active' status, increment our count!
+        if new_emp.employee_current_status == 'active':
+            active_counts[chosen_role] += 1
+            
+    return all_employees
 
 
 # Quick verification test
+# Quick verification test
 if __name__ == "__main__":
-    
+    # 1. Generate a shop
     shop = generate_coffee_shop(1)
     print(f"Shop Name: {shop.shop_name}")
     print(f"Address:   {shop.shop_address.to_string()}")
     print(f"Opened:    {shop.shop_opened_at}")
-    capacity = determine_shop_capacity()
-    print(f"Staff Capacity (Roles Allocated): {capacity}")
-    roles = allocate_roles_for_shop(capacity)
-    all_generated_employees = []
-    for role in roles:
-        emp = generate_employee(shop, role)
-        all_generated_employees.append(emp)
-    active_employees = [
-        emp for emp in all_generated_employees 
-        if emp.employee_current_status == 'active'
-    ]
-    total_active = len(active_employees)
-    print(f"Total Active Employees: {total_active} (out of {len(all_generated_employees)} hired total)")
-    products = generate_shop_products(shop, total_employees=total_active)
+    print("\n" + "="*50)
+    print("HIRING STAFF (Ensuring active minimums are met)...")
+    print("="*50)
+    
+    # 2. Generate staff using our strict constraint solver loop
+    all_employees = generate_shop_staff(shop)
+    
+    # 3. Print out the results to verify
+    active_employees = [e for e in all_employees if e.employee_current_status == 'active']
+    suspended_employees = [e for e in all_employees if e.employee_current_status == 'suspended']
+    terminated_employees = [e for e in all_employees if e.employee_current_status == 'terminated']
+    
+    print(f"\nTotal Hired Historically: {len(all_employees)}")
+    print(f"Total Currently Active:   {len(active_employees)}")
+    print(f"Total Suspended:          {len(suspended_employees)}")
+    print(f"Total Terminated:         {len(terminated_employees)}")
+    
+    # Let's count active roles to make sure our limits worked
+    active_by_role = {'manager': 0, 'barista': 0, 'cashier': 0, 'waiter': 0}
+    for e in active_employees:
+        active_by_role[e.employee_role] += 1
+        
+    print("\nActive Staff Breakdown:")
+    for role, count in active_by_role.items():
+        print(f"  - {role.capitalize()}s: {count}")
+        
+    # 4. Generate Products using our guaranteed active count!
+    products = generate_shop_products(shop, total_employees=len(active_employees))
     
     print("\n" + "="*20 + " GENERATED PRODUCTS " + "="*20)
-    for prod in products:
+    for prod in products[:5]: # Print first 5 products as sample
         status_str = "In Stock" if prod.product_is_available else "Out of Stock"
         print(f"- [{prod.product_category}] {prod.product_name}: {prod.product_current_price} ({status_str})")
