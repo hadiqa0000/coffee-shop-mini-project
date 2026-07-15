@@ -96,7 +96,7 @@ def generate_coffee_shop(shop_index:int) -> CoffeeShop:
     shop_opened_at = start_date + timedelta(days=random_days)
     
     return CoffeeShop(
-        shop_id=f"{shop_index:10d}
+        shop_id=shop_id,
         shop_name=shop_name,
         shop_address=shop_address,
         shop_phone=shop_phone,
@@ -199,6 +199,16 @@ def generate_employee_hire_date(shop_opened_at: date) -> date:
         random_days_to_add = random.randint(0, window_in_days)
     hire_date = shop_opened_at + timedelta(days=random_days_to_add)
     return hire_date
+
+def generate_employee_status(
+
+
+
+
+
+
+
+
 
 
 

@@ -17,7 +17,7 @@ CREATE TABLE Employee(
     employee_dob DATE NO NULL,
     employee_role VARCHAR(20) NOT NULL CHECK (employee_role IN ('cashier','manager','barista', 'waiter')),
     employee_hire_date DATE NOT NULL,
-    employee_current_status VARCHAR(15) NOT NULL DEFAULT 'active' CHECK(employee_current_status IN('active', 'suspended', 'inactive')),
+    employee_current_status VARCHAR(15) NOT NULL DEFAULT 'active' CHECK(employee_current_status IN('active', 'suspended', 'terminated')),
     PRIMARY KEY(shop_id, employee_id),
     FOREIGN KEY (shop_id) REFERENCES CoffeeShop(shop_id) ON DELETE CASCADE
 ); 
