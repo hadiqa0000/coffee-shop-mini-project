@@ -135,17 +135,22 @@ def generate_employee_first_name() ->str:
         
         
         return gender, first_name
-def generate_employee_middle_name()->str:
-       if gender == 'Male'
-        middle_name = fake.first_name_male() 
+def generate_employee_middle_name(gender: str, first_name: str) -> Optional[str]:
+    
+    if random.random() > 0.25:
+        return None
         
-       if gender == 'Female'
-       middle_name == fake.first_name_female()
-       
-       else:
-       middle_name == fake.first_name()
-       
-       return middle_name
+    while True:
+        if gender == 'Male':
+            mid = fake.first_name_male() 
+        elif gender == 'Female':
+            mid = fake.first_name_female()
+        else:
+            mid = fake.first_name()
+        
+        # Rule: First and middle names must be unique!
+        if mid != first_name:
+            return mid
        
      #rules to implement later
      ##in the faker,since we're using first_name builtin function, the name for the second and first name (defined funcitons) cannot be the same 
@@ -276,11 +281,11 @@ def determine_employment_status(gender: str, dob: date, hire_date: date) -> tupl
                 'return_age': return_age
             })
     
-    # 3. MATERNITY for females (27-30)
+    
     if gender == 'female' and 27 <= current_age <= 30:
         if random.random() < 0.18: 
             
-            # 56% leave permanently within 12 months (national statistic)
+           
             if random.random() < 0.56:
                 return ('terminated', 'maternity_exit', {
                     'reason': 'Left labor market after childbirth',
@@ -307,7 +312,7 @@ def determine_employment_status(gender: str, dob: date, hire_date: date) -> tupl
                         'return_probability': 'Low (25% chance of keeping job)'
                     })
     
-    # 4. Annual turnover check (75-80%)
+    
     if days_since_hired > 180:
         annual_turnover_chance = 0.76
         daily_turnover_chance = 1 - (1 - annual_turnover_chance) ** (1/365)
@@ -319,7 +324,36 @@ def determine_employment_status(gender: str, dob: date, hire_date: date) -> tupl
     return ('active', None, None)
     
     
+ def generate_employee(parent_shop: CoffeeShop, assigned_role: str) -> Employee:
+   
+    gender = random.choices(EMPLOYEE_GENDER, weights=GENDER_WEIGHTS, k=1)[0]
+    first_name = generate_employee_first_name(gender)
+    middle_name = generate_employee_middle_name(gender, first_name)
+    surname = generate_employee_surname_name()
     
+    
+    hire_date = generate_employee_hire_date(parent_shop.shop_opened_at)
+    dob = generate_employee_dob(hire_date)
+    
+   
+    status, details = determine_employment_status(gender, dob, hire_date)
+    
+    
+    
+    db_status = 'inactive' if status == 'terminated' else status
+    
+    return Employee(
+        shop_id=parent_shop.shop_id,
+        employee_first_name=first_name,
+        employee_surname_name=surname,
+        employee_middle_name=middle_name,
+        employee_gender=gender.lower(), 
+        employee_dob=dob,
+        employee_role=assigned_role,
+        employee_hire_date=hire_date,
+        employee_current_status=db_status,
+        status_notes=details
+    )   
     
     
 def determine_termination_reason(gender: str) -> str:
