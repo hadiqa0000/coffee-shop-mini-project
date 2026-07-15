@@ -4,6 +4,7 @@ from datetime import date, timedelta
 import random
 from faker import Faker
 from typing import Optional
+import math
 
 fake = Faker('tr_TR')
 
@@ -166,7 +167,7 @@ def generate_employee_dob(employee_hire_date : date) -> date:
         age_in_days = int(age_in_years * 365.25)
     dob = hire_date - timedelta(days=age_in_days)
     return dob
-
+#helper function
 def determine_shop_capacity() -> int:
    capacity = int(random.gauss(6.0, 2.0))
     return max(3, min(capacity, 12))
@@ -200,15 +201,138 @@ def generate_employee_hire_date(shop_opened_at: date) -> date:
     hire_date = shop_opened_at + timedelta(days=random_days_to_add)
     return hire_date
 
-def generate_employee_status(
+
+#helper function
+import random
+from datetime import date, timedelta
+import numpy as np
+from collections import Counter
+
+def generate_expected_tenure_days() -> int:
+   
+    mean_days = 16 * 30
+    std_dev_days = 4 * 30
+    tenure_days = int(random.gauss(mean_days, std_dev_days))
+    return max(15, min(tenure_days, 5 * 365))
+    
+    
+    
+    
+
+def determine_termination_reason(gender: str) -> str:
+    """15-20% fired, 80-85% voluntary. Men fired more."""
+    if gender == 'male':
+        fired_chance = 0.22
+    else:
+        fired_chance = 0.14
+    
+    if random.random() < fired_chance:
+        return 'fired'
+    else:
+        return 'voluntary'
 
 
 
-
-
-
-
-
+def determine_employment_status(gender: str, dob: date, hire_date: date) -> tuple:
+    """
+    Returns: (status, reason, details)
+    status: 'active', 'suspended', 'terminated'
+    """
+    today = date.today()
+    current_age = (today - dob).days / 365.25
+    days_since_hired = (today - hire_date).days
+    
+    expected_tenure_days = generate_expected_tenure_days()
+    
+    
+    if days_since_hired > expected_tenure_days:
+        termination_reason = determine_termination_reason(gender)
+        return ('terminated', termination_reason, None)
+    
+    
+    if gender == 'male' and 20 <= current_age <= 30:
+        if random.random() < 0.65:  # 65% go to military
+            suspension_duration = 6 * 30
+            
+            
+        return_age = current_age + 0.5
+            
+            if days_since_hired + suspension_duration > expected_tenure_days:
+                return ('terminated', 'fired_during_suspension', None)
+            return ('suspended', 'military_service', {
+                'duration_days': suspension_duration,
+                'expected_return': (today + timedelta(days=suspension_duration)).isoformat()
+            })
+            
+            
+            if random.random() < 0.18:
+                return ('terminated', 'did_not_return_from_military', {
+                    'reason': 'Did not return to job after military service',
+                    'service_duration_months': 6
+                })
+           return ('suspended', 'military_service', {
+                'duration_days': suspension_duration,
+                'expected_return': (today + timedelta(days=suspension_duration)).isoformat(),
+                'return_age': return_age
+            })
+    
+    # 3. MATERNITY for females (27-30)
+    if gender == 'female' and 27 <= current_age <= 30:
+        if random.random() < 0.18: 
+            
+            # 56% leave permanently within 12 months (national statistic)
+            if random.random() < 0.56:
+                return ('terminated', 'maternity_exit', {
+                    'reason': 'Left labor market after childbirth',
+                    'statistic': '56% of mothers leave within 12 months'
+                })
+            else:
+                suspension_duration = 4 * 30  
+                
+                
+                if random.random() < 0.75:  
+                    return ('terminated', 'terminated_after_maternity', {
+                        'reason': 'Terminated after maternity leave return',
+                        'suspension_duration': suspension_duration,
+                        'note': 'Most women are let go shortly after maternity leave'
+                    })
+                else:
+                   
+                    if days_since_hired + suspension_duration > expected_tenure_days:
+                        return ('terminated', 'fired_during_suspension', None)
+                    return ('suspended', 'maternity_leave', {
+                        'duration_days': suspension_duration,
+                        'expected_return': (today + timedelta(days=suspension_duration)).isoformat(),
+                        'will_return': True,
+                        'return_probability': 'Low (25% chance of keeping job)'
+                    })
+    
+    # 4. Annual turnover check (75-80%)
+    if days_since_hired > 180:
+        annual_turnover_chance = 0.76
+        daily_turnover_chance = 1 - (1 - annual_turnover_chance) ** (1/365)
+        
+        if random.random() < daily_turnover_chance:
+            termination_reason = determine_termination_reason(gender)
+            return ('terminated', termination_reason, None)
+    
+    return ('active', None, None)
+    
+    
+    
+    
+    
+def determine_termination_reason(gender: str) -> str:
+   
+    if gender == 'male':
+        fired_chance = 0.22
+    else:
+        fired_chance = 0.14
+    
+    if random.random() < fired_chance:
+        return 'fired'
+    else:
+        return 'voluntary'
 
 
 
