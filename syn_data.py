@@ -30,11 +30,23 @@ class Address:
 
 @dataclass 
 class CoffeeShop:
-    shop_id : int
+    shop_id: int
     shop_name: str
     shop_address: Address  
     shop_phone: str
     shop_opened_at: datetime.date
+
+@dataclass
+class Employee:
+    shop_id: int
+    employee_first_name: str
+    employee_surname_name: str
+    employee_middle_name: Optional[str] = None
+    employee_gender: str
+    employee_dob: date 
+    employee_role: str
+    employee_hire_date: date
+    employee_current_status: str
 
 generated_addresses = set()
 
@@ -73,20 +85,16 @@ def generate_unique_shop_name() -> str:
             generated_shop_names.add(name_candidate)
             return name_candidate
 
-
 generated_phones = set()
+
 def generate_unique_phone() -> str:
-   
-   while True:
-        
+    while True:
         phone = fake.phone_number()
-        
-        
         if phone not in generated_phones:
             generated_phones.add(phone)
             return phone
 
-def generate_coffee_shop(shop_index:int) -> CoffeeShop:
+def generate_coffee_shop(shop_index: int) -> CoffeeShop:
     shop_name = generate_unique_shop_name()
     shop_address = generate_unique_address()
     shop_phone = generate_unique_phone()
@@ -97,52 +105,32 @@ def generate_coffee_shop(shop_index:int) -> CoffeeShop:
     shop_opened_at = start_date + timedelta(days=random_days)
     
     return CoffeeShop(
-        shop_id=shop_id,
+        shop_id=shop_index,
         shop_name=shop_name,
         shop_address=shop_address,
         shop_phone=shop_phone,
         shop_opened_at=shop_opened_at
     )
-    
-    
-    
-@dataclass Employee
-shop_id : int
-    employee_first_name : str
-    employee_surname_name : str
-    employee_middle_name: Optional[str] = None
-    employee_gender : str
-    employee_dob : date 
-    employee_role : str
-    employee_hire_date : date
-    employee_current_status : str
 
 EMPLOYEE_GENDER = ['Female', 'Male', 'Intersex']
-gender = random.choices(GENDERS, weights=[51.90, 47.2, 1.7], k=1)[0]
+GENDER_WEIGHTS = [51.90, 47.2, 1.7]
 
-def generate_employee_first_name() ->str:
-        
-        
-        if gender == 'Male'
-        first_name = fake.first_name_male() 
-        
-        if gender == 'Female'
+def generate_employee_first_name(gender: str) -> str:
+    if gender == 'Male':
+        first_name = fake.first_name_male()
+    elif gender == 'Female':
         first_name = fake.first_name_female()
-        
-        
-        else:
+    else:
         first_name = fake.first_name()
-        
-        
-        return gender, first_name
+    return first_name
+
 def generate_employee_middle_name(gender: str, first_name: str) -> Optional[str]:
-    
     if random.random() > 0.25:
         return None
         
     while True:
         if gender == 'Male':
-            mid = fake.first_name_male() 
+            mid = fake.first_name_male()
         elif gender == 'Female':
             mid = fake.first_name_female()
         else:
@@ -151,32 +139,23 @@ def generate_employee_middle_name(gender: str, first_name: str) -> Optional[str]
         # Rule: First and middle names must be unique!
         if mid != first_name:
             return mid
-       
-     #rules to implement later
-     ##in the faker,since we're using first_name builtin function, the name for the second and first name (defined funcitons) cannot be the same 
-     
-     #not the whole population will have middlenames, there will be a specific percentage of people who will have middle names 
-     #maybe i can do random choices when generating middlenames inthe generate employee loop with a weighted percentage list
+
 def generate_employee_surname_name() -> str:
-       surname = fake.last_name():
-       
-       return surname
+    surname = fake.last_name()
+    return surname
 
-      
-
-def generate_employee_dob(employee_hire_date : date) -> date:
+def generate_employee_dob(employee_hire_date: date) -> date:
     while True:
         age_in_years = random.gauss(23.0, 4.5)
         if age_in_years >= 16.0:
             break
-        age_in_days = int(age_in_years * 365.25)
-    dob = hire_date - timedelta(days=age_in_days)
+    age_in_days = int(age_in_years * 365.25)
+    dob = employee_hire_date - timedelta(days=age_in_days)
     return dob
-#helper function
-def determine_shop_capacity() -> int:
-   capacity = int(random.gauss(6.0, 2.0))
-    return max(3, min(capacity, 12))
 
+def determine_shop_capacity() -> int:
+    capacity = int(random.gauss(6.0, 2.0))
+    return max(3, min(capacity, 12))
 
 def allocate_roles_for_shop(total_employees: int) -> list[str]:
     roles = []
@@ -184,7 +163,7 @@ def allocate_roles_for_shop(total_employees: int) -> list[str]:
         roles.extend(['manager', 'manager']) 
     else:
         roles.append('manager')  
-      remaining_slots = total_employees - len(roles)
+    remaining_slots = total_employees - len(roles)
     pool_options = ['barista', 'cashier']
     pool_weights = [0.65, 0.35]
     
@@ -194,39 +173,25 @@ def allocate_roles_for_shop(total_employees: int) -> list[str]:
     random.shuffle(roles)
     return roles
 
-
-
 def generate_employee_hire_date(shop_opened_at: date) -> date:
-    
-   today = date.today()
-   window_in_days = (today - shop_opened_at).days
+    today = date.today()
+    window_in_days = (today - shop_opened_at).days
     if window_in_days <= 0:
         return shop_opened_at
-        random_days_to_add = random.randint(0, window_in_days)
+    random_days_to_add = random.randint(0, window_in_days)
     hire_date = shop_opened_at + timedelta(days=random_days_to_add)
     return hire_date
 
-
-#helper function
-import random
-from datetime import date, timedelta
-import numpy as np
-from collections import Counter
-
 def generate_expected_tenure_days() -> int:
-   
     mean_days = 16 * 30
     std_dev_days = 4 * 30
     tenure_days = int(random.gauss(mean_days, std_dev_days))
     return max(15, min(tenure_days, 5 * 365))
-    
-    
-    
-    
 
 def determine_termination_reason(gender: str) -> str:
     """15-20% fired, 80-85% voluntary. Men fired more."""
-    if gender == 'male':
+    gender_lower = gender.lower()
+    if gender_lower == 'male':
         fired_chance = 0.22
     else:
         fired_chance = 0.14
@@ -235,8 +200,6 @@ def determine_termination_reason(gender: str) -> str:
         return 'fired'
     else:
         return 'voluntary'
-
-
 
 def determine_employment_status(gender: str, dob: date, hire_date: date) -> tuple:
     """
@@ -249,43 +212,33 @@ def determine_employment_status(gender: str, dob: date, hire_date: date) -> tupl
     
     expected_tenure_days = generate_expected_tenure_days()
     
-    
     if days_since_hired > expected_tenure_days:
         termination_reason = determine_termination_reason(gender)
         return ('terminated', termination_reason, None)
     
+    gender_lower = gender.lower()
     
-    if gender == 'male' and 20 <= current_age <= 30:
+    if gender_lower == 'male' and 20 <= current_age <= 30:
         if random.random() < 0.65:  # 65% go to military
             suspension_duration = 6 * 30
-            
-            
-        return_age = current_age + 0.5
+            return_age = current_age + 0.5
             
             if days_since_hired + suspension_duration > expected_tenure_days:
                 return ('terminated', 'fired_during_suspension', None)
-            return ('suspended', 'military_service', {
-                'duration_days': suspension_duration,
-                'expected_return': (today + timedelta(days=suspension_duration)).isoformat()
-            })
-            
             
             if random.random() < 0.18:
                 return ('terminated', 'did_not_return_from_military', {
                     'reason': 'Did not return to job after military service',
                     'service_duration_months': 6
                 })
-           return ('suspended', 'military_service', {
+            return ('suspended', 'military_service', {
                 'duration_days': suspension_duration,
                 'expected_return': (today + timedelta(days=suspension_duration)).isoformat(),
                 'return_age': return_age
             })
     
-    
-    if gender == 'female' and 27 <= current_age <= 30:
+    if gender_lower == 'female' and 27 <= current_age <= 30:
         if random.random() < 0.18: 
-            
-           
             if random.random() < 0.56:
                 return ('terminated', 'maternity_exit', {
                     'reason': 'Left labor market after childbirth',
@@ -294,7 +247,6 @@ def determine_employment_status(gender: str, dob: date, hire_date: date) -> tupl
             else:
                 suspension_duration = 4 * 30  
                 
-                
                 if random.random() < 0.75:  
                     return ('terminated', 'terminated_after_maternity', {
                         'reason': 'Terminated after maternity leave return',
@@ -302,7 +254,6 @@ def determine_employment_status(gender: str, dob: date, hire_date: date) -> tupl
                         'note': 'Most women are let go shortly after maternity leave'
                     })
                 else:
-                   
                     if days_since_hired + suspension_duration > expected_tenure_days:
                         return ('terminated', 'fired_during_suspension', None)
                     return ('suspended', 'maternity_leave', {
@@ -311,7 +262,6 @@ def determine_employment_status(gender: str, dob: date, hire_date: date) -> tupl
                         'will_return': True,
                         'return_probability': 'Low (25% chance of keeping job)'
                     })
-    
     
     if days_since_hired > 180:
         annual_turnover_chance = 0.76
@@ -322,23 +272,17 @@ def determine_employment_status(gender: str, dob: date, hire_date: date) -> tupl
             return ('terminated', termination_reason, None)
     
     return ('active', None, None)
-    
-    
- def generate_employee(parent_shop: CoffeeShop, assigned_role: str) -> Employee:
-   
+
+def generate_employee(parent_shop: CoffeeShop, assigned_role: str) -> Employee:
     gender = random.choices(EMPLOYEE_GENDER, weights=GENDER_WEIGHTS, k=1)[0]
     first_name = generate_employee_first_name(gender)
     middle_name = generate_employee_middle_name(gender, first_name)
     surname = generate_employee_surname_name()
     
-    
     hire_date = generate_employee_hire_date(parent_shop.shop_opened_at)
     dob = generate_employee_dob(hire_date)
     
-   
-    status, details = determine_employment_status(gender, dob, hire_date)
-    
-    
+    status, reason, details = determine_employment_status(gender, dob, hire_date)
     
     db_status = 'inactive' if status == 'terminated' else status
     
@@ -351,39 +295,29 @@ def determine_employment_status(gender: str, dob: date, hire_date: date) -> tupl
         employee_dob=dob,
         employee_role=assigned_role,
         employee_hire_date=hire_date,
-        employee_current_status=db_status,
-        status_notes=details
-    )   
-    
-    
-def determine_termination_reason(gender: str) -> str:
-   
-    if gender == 'male':
-        fired_chance = 0.22
-    else:
-        fired_chance = 0.14
-    
-    if random.random() < fired_chance:
-        return 'fired'
-    else:
-        return 'voluntary'
-
-
-
+        employee_current_status=db_status
+    )
 
 # Quick verification test
+# ------------------------------------------------------------------
 if __name__ == "__main__":
-    shop = generate_coffee_shop()
-    print(shop)
-    print(shop.shop_address.to_string())
+    print("Generating Test Cluster...")
     
     
-    
-    
-    
-    
-    
-    
-    
-    
-
+    for idx in range(1, 11:
+        shop = generate_coffee_shop(idx)
+        print("\n=============================================")
+        print(f"STORE: {shop.shop_name} (Opened: {shop.shop_opened_at})")
+        print(f"ADDRESS: {shop.shop_address.to_string()}")
+        print("=============================================")
+        
+        num_staff = determine_shop_capacity()
+        roles = allocate_roles_for_shop(num_staff)
+        
+        for role in roles:
+            emp = generate_employee(shop, role)
+            middle = f" {emp.employee_middle_name}" if emp.employee_middle_name else ""
+            print(f"- [{emp.employee_role.upper()}] {emp.employee_first_name}{middle} {emp.employee_surname_name}")
+            print(f"  Gender: {emp.employee_gender.capitalize()} | DOB: {emp.employee_dob} | Hired: {emp.employee_hire_date}")
+            print(f"  Status: {emp.employee_current_status.upper()} ({emp.status_notes})")
+            print("  -------------------------------------------")
