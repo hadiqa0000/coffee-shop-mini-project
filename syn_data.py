@@ -15,7 +15,6 @@ TURKIYE_GEOGRAPHY = {
 }
 
 
-
 @dataclass
 class Address:
     building_no: str
@@ -37,7 +36,6 @@ class CoffeeShop:
 
 @dataclass
 class Employee:
-    
     shop_id: int
     employee_first_name: str
     employee_surname_name: str
@@ -49,22 +47,13 @@ class Employee:
     employee_middle_name: Optional[str] = None
     reason_for_suspension: str = 'active'  
     
-    
-    
-    
 @dataclass
-class product:
+class Product:
     shop_id : int
     product_name: str
     product_category : str
     product_current_price : str
-    product_is_available : boolean
-    
-
-    
-    
-
-    
+    product_is_available : bool
 
 
 generated_addresses = set()
@@ -219,11 +208,6 @@ def determine_termination_reason(gender: str) -> str:
         return 'voluntary'
 
 def determine_employment_status(gender: str, dob: date, hire_date: date) -> tuple:
-    """
-    Returns: (status, suspension_reason)
-    status: 'active', 'suspended', 'terminated'
-    suspension_reason: None, 'maternity leave', 'military service'
-    """
     today = date.today()
     current_age = (today - dob).days / 365.25
     days_since_hired = (today - hire_date).days
@@ -235,9 +219,9 @@ def determine_employment_status(gender: str, dob: date, hire_date: date) -> tupl
     
     gender_lower = gender.lower()
     
-    # Military service for males
+    
     if gender_lower == 'male' and 20 <= current_age <= 30:
-        if random.random() < 0.65:  # 65% go to military
+        if random.random() < 0.65:  
             suspension_duration = 6 * 30
             
             if days_since_hired + suspension_duration > expected_tenure_days:
@@ -248,22 +232,22 @@ def determine_employment_status(gender: str, dob: date, hire_date: date) -> tupl
             
             return ('suspended', 'military service')
     
-    # Maternity leave for females
+    
     if gender_lower == 'female' and 27 <= current_age <= 30:
         if random.random() < 0.18:
-            if random.random() < 0.56:  # 56% leave permanently
+            if random.random() < 0.56:  
                 return ('terminated', None)
             else:
                 suspension_duration = 4 * 30
                 
-                if random.random() < 0.75:  # 75% terminated after return
+                if random.random() < 0.75:  
                     return ('terminated', None)
                 else:
                     if days_since_hired + suspension_duration > expected_tenure_days:
                         return ('terminated', None)
                     return ('suspended', 'maternity leave')
     
-    # Regular turnover
+   
     if days_since_hired > 180:
         annual_turnover_chance = 0.76
         daily_turnover_chance = 1 - (1 - annual_turnover_chance) ** (1/365)
@@ -317,37 +301,69 @@ PRODUCT_BASELINE = {
     }
 }
 
-
 LOCATION_PREMIUMS = {
     "Kadikoy": 1.25, "Besiktas": 1.25, "Sisli": 1.25, "Cankaya": 1.25,
     "Uskudar": 1.10, "Karsiyaka": 1.10, "Bornova": 1.10, "Yenimahalle": 1.10,
     "Fatih": 1.00, "Sariyer": 1.15, "Konak": 1.05,
-    "Avcilar": 0.90, "Kecioren": 0.90, "Etimesgut": 0.90, "Buca": 0.90
+    "Avcilar": 0.90, "Keçiören": 0.90, "Etimesgut": 0.90, "Buca": 0.90
 } 
+
+def get_employees_by_shop(shop_id: int, all_employees: List[Employee]) -> List[Employee]:
+    """Get all employees working at a specific coffee shop."""
+    return [emp for emp in all_employees if emp.shop_id == shop_id]
+
+    
+def calculate_shop_price_modifier(shop: CoffeeShop, total_employees: int) -> float:
+    # Uses the total_employees passed down to compute labor premium
+    district = shop.shop_address.district
+    location_multiplier = LOCATION_PREMIUMS.get(district, 1.00)
+    labor_multiplier = 1.0 + (total_employees * 0.02)
+    return location_multiplier * labor_multiplier   
     
     
+def generate_shop_products(shop: CoffeeShop, total_employees: int) -> list[Product]:
+    shop_products = []
+    price_modifier = calculate_shop_price_modifier(shop, total_employees)
+    for category, products in PRODUCT_BASELINE.items():
+        for product_name, base_price in products.items():
+            if random.random() < 0.75:
+                # Apply the modifier to the baseline price
+                final_price = round(base_price * price_modifier, 2)
+                is_available = random.choices([True, False], weights=[0.93, 0.07], k=1)[0]
+                new_product = Product(
+                    shop_id=shop.shop_id,
+                    product_name=product_name,
+                    product_category=category,
+                    product_current_price=f"{final_price:.2f} TL",
+                    product_is_available=is_available
+                )
+                shop_products.append(new_product)
+     return shop_products   
 
 
 # Quick verification test
 if __name__ == "__main__":
-    # Generate a shop
+    
     shop = generate_coffee_shop(1)
-    print(f"Shop: {shop.shop_name}")
-    print(f"Address: {shop.shop_address.to_string()}")
-    print(f"Opened: {shop.shop_opened_at}")
-    
-    # Generate employees
-    print("\n" + "="*50)
-    roles = allocate_roles_for_shop(determine_shop_capacity())
-    
-    for i, role in enumerate(roles, 1):
+    print(f"Shop Name: {shop.shop_name}")
+    print(f"Address:   {shop.shop_address.to_string()}")
+    print(f"Opened:    {shop.shop_opened_at}")
+    capacity = determine_shop_capacity()
+    print(f"Staff Capacity (Roles Allocated): {capacity}")
+    roles = allocate_roles_for_shop(capacity)
+    all_generated_employees = []
+    for role in roles:
         emp = generate_employee(shop, role)
-        print(f"\nEmployee {i}:")
-        print(f"  Name: {emp.employee_first_name} {emp.employee_surname_name}")
-        print(f"  Gender: {emp.employee_gender}")
-        print(f"  Role: {emp.employee_role}")
-        print(f"  Status: {emp.employee_current_status}")
-        if emp.reason_for_suspension != 'active':
-            print(f"  Suspension Reason: {emp.reason_for_suspension}")
-        print(f"  DOB: {emp.employee_dob}")
-        print(f"  Hired: {emp.employee_hire_date}")
+        all_generated_employees.append(emp)
+    active_employees = [
+        emp for emp in all_generated_employees 
+        if emp.employee_current_status == 'active'
+    ]
+    total_active = len(active_employees)
+    print(f"Total Active Employees: {total_active} (out of {len(all_generated_employees)} hired total)")
+    products = generate_shop_products(shop, total_employees=total_active)
+    
+    print("\n" + "="*20 + " GENERATED PRODUCTS " + "="*20)
+    for prod in products:
+        status_str = "In Stock" if prod.product_is_available else "Out of Stock"
+        print(f"- [{prod.product_category}] {prod.product_name}: {prod.product_current_price} ({status_str})")
