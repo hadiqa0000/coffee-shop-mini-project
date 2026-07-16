@@ -5,6 +5,8 @@ from datetime import date, timedelta, time, datetime
 import random
 from faker import Faker
 from typing import Optional, List, Dict, Tuple
+import psycopg2
+import json
 
 fake = Faker('tr_TR')
 
@@ -50,7 +52,7 @@ class CoffeeShop:
     shop_phone: str
     shop_opened_at: date
     operating_hours: list[tuple[time, time]]
-    shop_markup_multiplier: float  # Unique tactical price variation (+/- 5%)
+    shop_markup_multiplier: float
 
 @dataclass
 class Employee:

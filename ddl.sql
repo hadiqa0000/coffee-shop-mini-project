@@ -20,7 +20,7 @@ CREATE TABLE Employee(
     employee_role VARCHAR(20) NOT NULL CHECK (employee_role IN ('cashier','manager','barista', 'waiter')),
     employee_hire_date DATE NOT NULL,
     employee_current_status VARCHAR(15) NOT NULL DEFAULT 'active' CHECK(employee_current_status IN('active', 'suspended', 'terminated')),
-    reason_for_suspension VARCHAR(15) NOT NULL DEFAULT 'active' CHECK(reason_for_suspension IN('maternity leave', 'military service')),
+    reason_for_suspension VARCHAR(15)  NULL DEFAULT 'active' CHECK(reason_for_suspension IN('maternity leave', 'military service')),
     PRIMARY KEY(shop_id, employee_id),
     FOREIGN KEY (shop_id) REFERENCES CoffeeShop(shop_id) ON DELETE CASCADE
 ); 
@@ -58,7 +58,7 @@ CREATE TABLE OrderItem(
     product_id BIGINT NOT NULL,
     quantity INT NOT NULL CHECK(quantity > 0),
     unit_price DECIMAL(12,2) NOT NULL CHECK(unit_price >= 0),
-    line_total DECIMAL(12,2) NOT NULL CHECK(line_total = quantity * unit_price),
+    line_total DECIMAL(12,2) GENERATED ALWAYS AS (quantity * unit_price) STORED,
     PRIMARY KEY(shop_id, order_item_id),
     FOREIGN KEY(shop_id, order_id) REFERENCES Orders(shop_id, order_id) ON DELETE CASCADE,
     FOREIGN KEY(shop_id, product_id) REFERENCES Product(shop_id, product_id) ON DELETE CASCADE
