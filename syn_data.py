@@ -39,6 +39,7 @@ class CoffeeShop:
     shop_address: Address  
     shop_phone: str
     shop_opened_at: datetime.date
+    operating_hours: list[tuple[datetime.time, datetime.time]] 
 
 @dataclass
 class Employee:
