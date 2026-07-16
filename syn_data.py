@@ -1,7 +1,8 @@
 from __future__ import annotations
 from dataclasses import dataclass
 import datetime 
-from datetime import date, timedelta
+# Added time and datetime to imports to fix the missing time reference error
+from datetime import date, timedelta, time, datetime
 import random
 from faker import Faker
 from typing import Optional, List, Dict, Tuple
@@ -39,7 +40,7 @@ class CoffeeShop:
     shop_address: Address  
     shop_phone: str
     shop_opened_at: datetime.date
-    operating_hours: list[tuple[datetime.time, datetime.time]]  #need to format the list into strings before dumping it into sql 
+    operating_hours: list[tuple[datetime.time, datetime.time]]  # need to format the list into strings before dumping it into sql 
 
 @dataclass
 class Employee:
@@ -63,7 +64,7 @@ class Product:
     product_current_price: float 
     product_is_available: bool
     
-@dataclass         
+@dataclass        
 class Orders:
    order_id: int  
    shop_id: int
@@ -89,8 +90,8 @@ class Payment:
    paid_at : datetime
    payment_method : str
    payment_status : str
-   payment_amount : float
-   
+   amount : float # Changed from payment_amount to amount to match generator assignment
+
 PAYMENT_METHOD = ['cash', 'card']
 PAYMENT_STATUS = ['pending', 'completed', 'cancelled']
 
@@ -141,9 +142,13 @@ def generate_unique_phone() -> str:
             return phone
 
 
-def minutes_to_time(minutes: float) -> time:
-    """Helper to clamp minutes within a 24-hour cycle and return a time object."""
-    total_minutes = int(minutes) % 1440
+def minutes_to_time(minutes: float, step_minutes: int = 30) -> time:
+    """Clamps minutes within a 24-hour cycle, rounds to the nearest interval 
+    (e.g., 30 mins), and returns a clean time object."""
+    # Round the raw minutes to the nearest step (e.g., nearest 30 mins)
+    rounded_minutes = int(round(minutes / step_minutes) * step_minutes)
+    
+    total_minutes = rounded_minutes % 1440
     hours = total_minutes // 60
     mins = total_minutes % 60
     return time(hours, mins)
@@ -159,9 +164,6 @@ def generate_coffee_shop(shop_index: int) -> CoffeeShop:
     random_days = random.randint(0, (end_date - start_date).days)
     shop_opened_at = start_date + timedelta(days=random_days)
     
-    
-        
-    
     open_minutes = random.gauss(mu=465, sigma=30)
     opening_time = minutes_to_time(open_minutes)
     
@@ -174,7 +176,7 @@ def generate_coffee_shop(shop_index: int) -> CoffeeShop:
         shop_name=shop_name,
         shop_address=shop_address,
         shop_phone=shop_phone,
-        shop_opened_at=shop_opened_at
+        shop_opened_at=shop_opened_at, # Fixed missing comma here
         operating_hours=operating_hours
     )
 
@@ -444,7 +446,6 @@ def generate_shop_staff(shop: CoffeeShop) -> List[Employee]:
     return all_employees
 
 
-
 def generate_single_transaction(
     order_id: int, 
     shop: CoffeeShop, 
@@ -455,22 +456,23 @@ def generate_single_transaction(
     distinct quantities, and the Payment to guarantee realistic shopping carts.
     """
     if not shop_products:
-        return None  
+        return None 
         
     today = date.today()
     days_open = (today - shop.shop_opened_at).days
     
     if days_open <= 0:
-        ordered_at = shop.shop_opened_at
+        ordered_at = datetime.combine(shop.shop_opened_at, datetime.min.time())
     else:
         random_days = random.randint(0, days_open)
-        ordered_at = shop.shop_opened_at + timedelta(days=random_days)
+        ordered_date = shop.shop_opened_at + timedelta(days=random_days)
+        random_time = time(random.randint(7, 22), random.randint(0, 59))
+        ordered_at = datetime.combine(ordered_date, random_time)
         
     available_products = [p for p in shop_products if p.product_is_available]
     if not available_products:
-        available_products = shop_products  
+        available_products = shop_products 
         
-    
     max_cart_variety = min(len(available_products), 4)
     cart_variety_size = random.choices(
         [1, 2, 3, 4], 
@@ -479,15 +481,12 @@ def generate_single_transaction(
     )[0]
     cart_variety_size = min(cart_variety_size, max_cart_variety)
     
-    
     purchased_products = random.sample(available_products, k=cart_variety_size)
-    
     
     order_items = []
     subtotal = 0.0
     
     for prod in purchased_products:
-        
         quantity = random.choices([1, 2, 3], weights=[0.85, 0.12, 0.03], k=1)[0]
         unit_price = prod.product_current_price
         line_total = round(unit_price * quantity, 2)
@@ -508,14 +507,12 @@ def generate_single_transaction(
     tax = round(subtotal * tax_rate, 2)
     total = round(subtotal + tax, 2)
     
-    
     order_status = random.choices(
         ['completed', 'cancelled', 'refunded'], 
         weights=[0.95, 0.03, 0.02], 
         k=1
     )[0]
     
-   
     order = Orders(
         order_id=order_id,
         shop_id=shop.shop_id,
@@ -525,7 +522,6 @@ def generate_single_transaction(
         order_tax=tax,
         order_total=total
     )
-    
     
     pay_method = random.choice(PAYMENT_METHOD)
     
@@ -542,23 +538,24 @@ def generate_single_transaction(
         paid_at=ordered_at,
         payment_method=pay_method,
         payment_status=pay_status,
-        amount=f"{total:.2f} TL"
+        amount=total # Assigned raw float total
     )
     
     return order, order_items, payment
 
 
 if __name__ == "__main__":
-    print("Creating coffee shops...")
+    print("=" * 80)
+    print("                      COFFEE SHOP GENERATOR DRY RUN OUTPUT                     ")
+    print("=" * 80)
+
+    # 1. GENERATE SHOPS
     shops = []
     num_shops = 1  
-    
     for i in range(1, num_shops + 1):
-        shop = generate_coffee_shop(i)
-        shops.append(shop)
-        print(f"  Shop #{i}: {shop.shop_name} in {shop.shop_address.district}, {shop.shop_address.city}")
+        shops.append(generate_coffee_shop(i))
     
-    print("\nGenerating employees and products...")
+    # 2. GENERATE STAFF & PRODUCTS FOR EACH SHOP
     all_employees = []
     employees_by_shop = {}
     products_by_shop = {}
@@ -571,13 +568,8 @@ if __name__ == "__main__":
         active_employees = [e for e in employees if e.employee_current_status == 'active']
         products = generate_shop_products(shop, len(active_employees))
         products_by_shop[shop.shop_id] = products
-        
-        print(f"  {shop.shop_name}: {len(employees)} employees ({len(active_employees)} active), {len(products)} products")
-    
-    print("\n" + "="*60)
-    print("GENERATING INTERLOCKING TRANSACTION ENTRIES")
-    print("="*60)
-    
+
+    # 3. GENERATE TRANSACTIONS
     all_orders: List[Orders] = []
     all_order_items: List[OrderItem] = []
     all_payments: List[Payment] = []
@@ -588,10 +580,7 @@ if __name__ == "__main__":
         days_open = (date.today() - shop.shop_opened_at).days
         order_rate = random.uniform(0.1, 0.4)
         num_orders = int(days_open * order_rate)
-        num_orders = max(5, num_orders)
-        
-        print(f"\nShop: '{shop.shop_name}' (ID: {shop.shop_id})")
-        print(f"  -> Generating {num_orders} orders & items...")
+        num_orders = max(5, num_orders)  # Minimum fallback limits
         
         for _ in range(num_orders):
             transaction = generate_single_transaction(order_id_counter, shop, shop_products)
@@ -601,27 +590,79 @@ if __name__ == "__main__":
                 all_order_items.extend(items)
                 all_payments.append(payment)
                 order_id_counter += 1
+
+    # ==========================================
+    # DUMP ALL GENERATED COFFEE SHOPS
+    # ==========================================
+    print(f"\n[TABLE] COFFEE_SHOPS ({len(shops)} record(s))")
+    print("-" * 120)
+    print(f"{'ID':<5} | {'Shop Name':<25} | {'Phone':<20} | {'Opened At':<12} | {'Operating Hours':<15} | Address")
+    print("-" * 120)
+    for s in shops:
+        hours_str = ", ".join([f"{h[0].strftime('%H:%M')}-{h[1].strftime('%H:%M')}" for h in s.operating_hours])
+        print(f"{s.shop_id:<5} | {s.shop_name:<25} | {s.shop_phone:<20} | {str(s.shop_opened_at):<12} | {hours_str:<15} | {s.shop_address.to_string()}")
+    print("-" * 120)
+
+    # ==========================================
+    # DUMP ALL GENERATED EMPLOYEES
+    # ==========================================
+    print(f"\n[TABLE] EMPLOYEES ({len(all_employees)} record(s))")
+    print("-" * 140)
+    print(f"{'ShopID':<6} | {'Full Name':<30} | {'Gender':<8} | {'DOB':<12} | {'Role':<10} | {'Hired At':<12} | {'Status':<11} | {'Suspension/Leave Reason'}")
+    print("-" * 140)
+    for e in all_employees:
+        middle = f" {e.employee_middle_name}" if e.employee_middle_name else ""
+        full_name = f"{e.employee_first_name}{middle} {e.employee_surname_name}"
+        print(f"{e.shop_id:<6} | {full_name:<30} | {e.employee_gender:<8} | {str(e.employee_dob):<12} | {e.employee_role:<10} | {str(e.employee_hire_date):<12} | {e.employee_current_status:<11} | {e.reason_for_suspension}")
+    print("-" * 140)
+
+    # ==========================================
+    # DUMP ALL GENERATED PRODUCTS
+    # ==========================================
+    for shop in shops:
+        shop_prods = products_by_shop[shop.shop_id]
+        print(f"\n[TABLE] PRODUCTS for Shop #{shop.shop_id} ({shop.shop_name}) - ({len(shop_prods)} items)")
+        print("-" * 90)
+        print(f"{'Prod ID':<8} | {'Category':<20} | {'Product Name':<35} | {'Price':<10} | {'Available'}")
+        print("-" * 90)
+        for p in shop_prods:
+            print(f"{p.product_id:<8} | {p.product_category:<20} | {p.product_name:<35} | ₺{p.product_current_price:<9.2f} | {str(p.product_is_available)}")
+        print("-" * 90)
+
+    # ==========================================
+    # DUMP ALL ORDERS, ORDER ITEMS, & PAYMENTS
+    # ==========================================
+    print(f"\n[TABLE] INTERLOCKING TRANSACTION LEDGER ({len(all_orders)} orders generated)")
+    print("=" * 120)
     
-    print(f"\n{'='*60}")
-    print(f"GENERATION COMPLETE!")
-    print(f"  Total Orders: {len(all_orders)}")
-    print(f"  Total OrderItems: {len(all_order_items)}")
-    print(f"  Total Payments: {len(all_payments)}")
-    print(f"{'='*60}")
-    
-   
-    print("\nSample Transaction Match Checking (First 5 orders):")
-    for idx, order in enumerate(all_orders[:]):
-        shop = next(s for s in shops if s.shop_id == order.shop_id)
-        print(f"\nOrder #{order.order_id} | Shop: {shop.shop_name} | Status: {order.order_status} | Total: ₺{order.order_total}")
-        
-       
+    for order in all_orders:
         matching_items = [item for item in all_order_items if item.order_id == order.order_id]
-        print("  Items Purchased:")
-        for item in matching_items:
-            prod_name = next(p.product_name for p in products_by_shop[shop.shop_id] if p.product_id == item.product_id)
-            print(f"    - {prod_name} | Qty: {item.quantity} | Unit Price: ₺{item.unit_price} | Line Total: ₺{item.line_total}")
-            
+        matching_pay = next((p for p in all_payments if p.order_id == order.order_id), None)
         
-        matching_pay = next(p for p in all_payments if p.order_id == order.order_id)
-        print(f"  Associated Payment: Method: {matching_pay.payment_method} | Status: {matching_pay.payment_status} | Paid amount: {matching_pay.amount}")
+        print(f"ORDER #{order.order_id} | Shop: {order.shop_id} | Placed at: {order.ordered_at} | Status: {order.order_status.upper()}")
+        print(f"  Subtotal: ₺{order.order_subtotal:.2f} | Tax (10%): ₺{order.order_tax:.2f} | Total Bill: ₺{order.order_total:.2f}")
+        
+        if matching_pay:
+            print(f"  PAYMENT: Method: {matching_pay.payment_method.upper()} | Status: {matching_pay.payment_status.upper()} | Amount Charged: ₺{matching_pay.amount:.2f}")
+        else:
+            print(f"  PAYMENT: NO MATCHING PAYMENT FOUND!")
+            
+        print("  ITEMS PURCHASED:")
+        print("    " + "-" * 80)
+        print(f"    {'Product ID':<12} | {'Product Name':<30} | {'Qty':<5} | {'Unit Price':<12} | {'Line Total'}")
+        print("    " + "-" * 80)
+        
+        for item in matching_items:
+            # Match item back to the list of products generated for this shop to fetch its name
+            prod_name = "Unknown Product"
+            for p in products_by_shop[order.shop_id]:
+                if p.product_id == item.product_id:
+                    prod_name = p.product_name
+                    break
+            print(f"    {item.product_id:<12} | {prod_name:<30} | {item.quantity:<5} | ₺{item.unit_price:<10.2f} | ₺{item.line_total:.2f}")
+        print("    " + "-" * 80)
+        print("\n" + "~"*120)
+        
+    print("\n" + "="*80)
+    print("                      ALL DOCKED DATA COMPLETED SUCCESSFULLY                   ")
+    print("="*80)
