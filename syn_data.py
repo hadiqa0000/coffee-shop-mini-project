@@ -76,12 +76,37 @@ class Orders:
 @dataclass
 
 class OrderItem:
-shop_id: int
-order_id : int
-product_id : int
-quantity : int
-unit_price : float
-line_total : float
+   shop_id: int
+   order_id : int
+   product_id : int
+   quantity : int
+   unit_price : float
+   line_total : float
+   
+   
+   
+   
+   
+@dataclass
+class Payment:
+   shop_id:int
+   order_id : int
+   paid_at : date
+   payment_method : str
+   payment_status : str
+   amount : str
+   
+   
+   
+   
+   
+PAYMENT_METHOD = ['cash', 'card']
+PAYMENT_STATUS = ['pending', 'completed', 'cancelled']
+
+
+
+
+
 
 
 generated_addresses = set()
