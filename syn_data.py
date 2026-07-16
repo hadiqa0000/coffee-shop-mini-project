@@ -546,16 +546,29 @@ def generate_single_transaction(
 
 if __name__ == "__main__":
     print("=" * 80)
-    print("                      COFFEE SHOP GENERATOR DRY RUN OUTPUT                     ")
+    print("                      COFFEE SHOP GENERATOR (OPTIMIZED)                        ")
     print("=" * 80)
 
-    # 1. GENERATE SHOPS
+    # 1. ASK USER FOR INPUT
+    while True:
+        user_input = input("Enter the number of coffee shops you want to generate: ").strip()
+        try:
+            num_shops = int(user_input)
+            if num_shops <= 0:
+                print("Please enter a positive number greater than 0.")
+                continue
+            break
+        except ValueError:
+            print(f"Invalid input '{user_input}'. Please enter a valid integer (e.g., 3).")
+
+    print(f"\nGenerating data for {num_shops} coffee shop(s)...\n")
+
+    # 2. GENERATE SHOPS
     shops = []
-    num_shops = 1  
     for i in range(1, num_shops + 1):
         shops.append(generate_coffee_shop(i))
     
-    # 2. GENERATE STAFF & PRODUCTS FOR EACH SHOP
+    # 3. GENERATE STAFF & PRODUCTS FOR EACH SHOP
     all_employees = []
     employees_by_shop = {}
     products_by_shop = {}
@@ -569,7 +582,7 @@ if __name__ == "__main__":
         products = generate_shop_products(shop, len(active_employees))
         products_by_shop[shop.shop_id] = products
 
-    # 3. GENERATE TRANSACTIONS
+    # 4. GENERATE TRANSACTIONS
     all_orders: List[Orders] = []
     all_order_items: List[OrderItem] = []
     all_payments: List[Payment] = []
@@ -580,7 +593,7 @@ if __name__ == "__main__":
         days_open = (date.today() - shop.shop_opened_at).days
         order_rate = random.uniform(0.1, 0.4)
         num_orders = int(days_open * order_rate)
-        num_orders = max(5, num_orders)  # Minimum fallback limits
+        num_orders = max(5, num_orders)  
         
         for _ in range(num_orders):
             transaction = generate_single_transaction(order_id_counter, shop, shop_products)
@@ -590,6 +603,26 @@ if __name__ == "__main__":
                 all_order_items.extend(items)
                 all_payments.append(payment)
                 order_id_counter += 1
+
+    # ==========================================
+    # PRE-INDEXING (THE SPEED UP MAGIC ⚡)
+    # ==========================================
+    print("Indexing generated data for instant printing...")
+    
+    # Group items by order_id: O(M) time complexity
+    items_by_order: Dict[int, List[OrderItem]] = {}
+    for item in all_order_items:
+        items_by_order.setdefault(item.order_id, []).append(item)
+        
+    # Map payments by order_id: O(P) time complexity
+    payments_by_order: Dict[int, Payment] = {p.order_id: p for p in all_payments}
+    
+    # Map products by (shop_id, product_id) for instant name lookup: O(Products)
+    products_registry: Dict[Tuple[int, int], str] = {
+        (p.shop_id, p.product_id): p.product_name 
+        for shop_id, prods in products_by_shop.items() 
+        for p in prods
+    }
 
     # ==========================================
     # DUMP ALL GENERATED COFFEE SHOPS
@@ -630,39 +663,37 @@ if __name__ == "__main__":
         print("-" * 90)
 
     # ==========================================
-    # DUMP ALL ORDERS, ORDER ITEMS, & PAYMENTS
+    # DUMP ALL ORDERS, ORDER ITEMS, & PAYMENTS (BUFFERED)
     # ==========================================
     print(f"\n[TABLE] INTERLOCKING TRANSACTION LEDGER ({len(all_orders)} orders generated)")
     print("=" * 120)
     
+    # We collect all lines into a list in memory
+    buffer = []
+    
     for order in all_orders:
-        matching_items = [item for item in all_order_items if item.order_id == order.order_id]
-        matching_pay = next((p for p in all_payments if p.order_id == order.order_id), None)
+        matching_items = items_by_order.get(order.order_id, [])
+        matching_pay = payments_by_order.get(order.order_id, None)
         
-        print(f"ORDER #{order.order_id} | Shop: {order.shop_id} | Placed at: {order.ordered_at} | Status: {order.order_status.upper()}")
-        print(f"  Subtotal: ₺{order.order_subtotal:.2f} | Tax (10%): ₺{order.order_tax:.2f} | Total Bill: ₺{order.order_total:.2f}")
+        buffer.append(f"ORDER #{order.order_id} | Shop: {order.shop_id} | Placed at: {order.ordered_at} | Status: {order.order_status.upper()}")
+        buffer.append(f"  Subtotal: ₺{order.order_subtotal:.2f} | Tax (10%): ₺{order.order_tax:.2f} | Total Bill: ₺{order.order_total:.2f}")
         
         if matching_pay:
-            print(f"  PAYMENT: Method: {matching_pay.payment_method.upper()} | Status: {matching_pay.payment_status.upper()} | Amount Charged: ₺{matching_pay.amount:.2f}")
+            buffer.append(f"  PAYMENT: Method: {matching_pay.payment_method.upper()} | Status: {matching_pay.payment_status.upper()} | Amount Charged: ₺{matching_pay.amount:.2f}")
         else:
-            print(f"  PAYMENT: NO MATCHING PAYMENT FOUND!")
+            buffer.append(f"  PAYMENT: NO MATCHING PAYMENT FOUND!")
             
-        print("  ITEMS PURCHASED:")
-        print("    " + "-" * 80)
-        print(f"    {'Product ID':<12} | {'Product Name':<30} | {'Qty':<5} | {'Unit Price':<12} | {'Line Total'}")
-        print("    " + "-" * 80)
+        buffer.append("  ITEMS PURCHASED:")
+        buffer.append("    " + "-" * 80)
+        buffer.append(f"    {'Product ID':<12} | {'Product Name':<30} | {'Qty':<5} | {'Unit Price':<12} | {'Line Total'}")
+        buffer.append("    " + "-" * 80)
         
         for item in matching_items:
-            # Match item back to the list of products generated for this shop to fetch its name
-            prod_name = "Unknown Product"
-            for p in products_by_shop[order.shop_id]:
-                if p.product_id == item.product_id:
-                    prod_name = p.product_name
-                    break
-            print(f"    {item.product_id:<12} | {prod_name:<30} | {item.quantity:<5} | ₺{item.unit_price:<10.2f} | ₺{item.line_total:.2f}")
-        print("    " + "-" * 80)
-        print("\n" + "~"*120)
+            prod_name = products_registry.get((order.shop_id, item.product_id), "Unknown Product")
+            buffer.append(f"    {item.product_id:<12} | {prod_name:<30} | {item.quantity:<5} | ₺{item.unit_price:<10.2f} | ₺{item.line_total:.2f}")
+        buffer.append("    " + "-" * 80)
+        buffer.append("\n" + "~"*120)
         
-    print("\n" + "="*80)
-    print("                      ALL DOCKED DATA COMPLETED SUCCESSFULLY                   ")
-    print("="*80)
+    # Flush everything to the terminal in one go
+    # Flush everything to the terminal in one go
+    print("\n".join(buffer))
