@@ -66,7 +66,7 @@ class Product:
 class Orders:
    order_id: int  
    shop_id: int
-   ordered_at: date
+   ordered_at: datetime
    order_status: str  # 'completed', 'cancelled', 'refunded'
    order_subtotal: float
    order_tax: float
@@ -85,7 +85,7 @@ class OrderItem:
 class Payment:
    shop_id: int
    order_id : int
-   paid_at : date
+   paid_at : datetime
    payment_method : str
    payment_status : str
    amount : str # Keeping string type from your original schema representation
@@ -531,7 +531,7 @@ def generate_single_transaction(
 if __name__ == "__main__":
     print("Creating coffee shops...")
     shops = []
-    num_shops = 5  
+    num_shops = 1  
     
     for i in range(1, num_shops + 1):
         shop = generate_coffee_shop(i)
@@ -591,7 +591,7 @@ if __name__ == "__main__":
     
    
     print("\nSample Transaction Match Checking (First 5 orders):")
-    for idx, order in enumerate(all_orders[:5]):
+    for idx, order in enumerate(all_orders[:]):
         shop = next(s for s in shops if s.shop_id == order.shop_id)
         print(f"\nOrder #{order.order_id} | Shop: {shop.shop_name} | Status: {order.order_status} | Total: ₺{order.order_total}")
         
