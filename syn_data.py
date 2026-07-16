@@ -58,7 +58,7 @@ class Product:
     shop_id: int
     product_name: str
     product_category: str
-    product_current_price: str
+    product_current_price: float
     product_is_available: bool
     
 @dataclass         
@@ -70,6 +70,18 @@ class Orders:
    order_subtotal: float
    order_tax: float
    order_total: float
+   
+   
+   
+@dataclass
+
+class OrderItem:
+shop_id: int
+order_id : int
+product_id : int
+quantity : int
+unit_price : float
+line_total : float
 
 
 generated_addresses = set()
@@ -414,6 +426,8 @@ def generate_single_order(
     else:
         random_days = random.randint(0, days_open)
         ordered_at = shop.shop_opened_at + timedelta(days=random_days)
+        
+   serving_employee = random.choice(active_employees)
         
     available_products = [p for p in shop_products if p.product_is_available]
     if not available_products:
