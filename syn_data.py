@@ -39,7 +39,7 @@ class CoffeeShop:
     shop_address: Address  
     shop_phone: str
     shop_opened_at: datetime.date
-    operating_hours: list[tuple[datetime.time, datetime.time]] 
+    operating_hours: list[tuple[datetime.time, datetime.time]]  #need to format the list into strings before dumping it into sql 
 
 @dataclass
 class Employee:
@@ -56,11 +56,11 @@ class Employee:
     
 @dataclass
 class Product:
-    product_id: int  # Added an ID to map items properly
+    product_id: int  
     shop_id: int
     product_name: str
     product_category: str
-    product_current_price: float  # Stored as float for easier calculations
+    product_current_price: float 
     product_is_available: bool
     
 @dataclass         
@@ -89,7 +89,7 @@ class Payment:
    paid_at : datetime
    payment_method : str
    payment_status : str
-   amount : str # Keeping string type from your original schema representation
+   payment_amount : float
    
 PAYMENT_METHOD = ['cash', 'card']
 PAYMENT_STATUS = ['pending', 'completed', 'cancelled']
@@ -140,6 +140,15 @@ def generate_unique_phone() -> str:
             generated_phones.add(phone)
             return phone
 
+
+def minutes_to_time(minutes: float) -> time:
+    """Helper to clamp minutes within a 24-hour cycle and return a time object."""
+    total_minutes = int(minutes) % 1440
+    hours = total_minutes // 60
+    mins = total_minutes % 60
+    return time(hours, mins)
+    
+    
 def generate_coffee_shop(shop_index: int) -> CoffeeShop:
     shop_name = generate_unique_shop_name()
     shop_address = generate_unique_address()
@@ -150,12 +159,23 @@ def generate_coffee_shop(shop_index: int) -> CoffeeShop:
     random_days = random.randint(0, (end_date - start_date).days)
     shop_opened_at = start_date + timedelta(days=random_days)
     
+    
+        
+    
+    open_minutes = random.gauss(mu=465, sigma=30)
+    opening_time = minutes_to_time(open_minutes)
+    
+    close_minutes = random.gauss(mu=1440, sigma=60)
+    closing_time = minutes_to_time(close_minutes)
+    operating_hours = [(opening_time, closing_time)]
+    
     return CoffeeShop(
         shop_id=shop_index,
         shop_name=shop_name,
         shop_address=shop_address,
         shop_phone=shop_phone,
         shop_opened_at=shop_opened_at
+        operating_hours=operating_hours
     )
 
 EMPLOYEE_GENDER = ['Female', 'Male', 'Intersex']
@@ -374,7 +394,7 @@ def generate_shop_products(shop: CoffeeShop, total_employees: int) -> List[Produ
                     shop_id=shop.shop_id,
                     product_name=product_name,
                     product_category=category,
-                    product_current_price=final_price, # Keeping numeric for float calculations
+                    product_current_price=final_price, 
                     product_is_available=is_available
                 )
                 shop_products.append(new_product)
@@ -423,7 +443,7 @@ def generate_shop_staff(shop: CoffeeShop) -> List[Employee]:
             
     return all_employees
 
-# --- UPDATED INTEGRATED TRANSACTION GENERATOR ---
+
 
 def generate_single_transaction(
     order_id: int, 
@@ -450,8 +470,7 @@ def generate_single_transaction(
     if not available_products:
         available_products = shop_products  
         
-    # 1. Determine how many DISTINCT products are in this order
-    # (e.g., a customer buys 1 to 4 different types of items)
+    
     max_cart_variety = min(len(available_products), 4)
     cart_variety_size = random.choices(
         [1, 2, 3, 4], 
@@ -460,15 +479,15 @@ def generate_single_transaction(
     )[0]
     cart_variety_size = min(cart_variety_size, max_cart_variety)
     
-    # Use random.sample to guarantee we get completely unique products
+    
     purchased_products = random.sample(available_products, k=cart_variety_size)
     
-    # 2. Generate child OrderItems with random quantities and sum up the exact subtotal
+    
     order_items = []
     subtotal = 0.0
     
     for prod in purchased_products:
-        # Every unique product now gets its own randomly assigned quantity
+        
         quantity = random.choices([1, 2, 3], weights=[0.85, 0.12, 0.03], k=1)[0]
         unit_price = prod.product_current_price
         line_total = round(unit_price * quantity, 2)
@@ -514,7 +533,7 @@ def generate_single_transaction(
         pay_status = 'completed'
     elif order_status == 'cancelled':
         pay_status = 'cancelled'
-    else: # refunded
+    else:
         pay_status = random.choice(['completed', 'cancelled'])
 
     payment = Payment(

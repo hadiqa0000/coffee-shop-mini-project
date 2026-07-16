@@ -70,7 +70,7 @@ CREATE TABLE Payment(
     paid_at TIMESTAMP NULL, --cannot be before shop_opened_at, it is a timestamp, which means date AND time
     payment_method VARCHAR(20) CHECK (payment_method IN ('cash', 'card')),
     payment_status VARCHAR(20) DEFAULT 'completed' CHECK(payment_status IN('pending', 'completed', 'cancelled')),
-    amount DECIMAL(12,2) NOT NULL, --should be equal to order_total
+    payment_amount DECIMAL(12,2) NOT NULL, --should be equal to order_total
     PRIMARY KEY(shop_id, payment_id),
     FOREIGN KEY(shop_id, order_id) REFERENCES Orders(shop_id, order_id) ON DELETE CASCADE
 );
