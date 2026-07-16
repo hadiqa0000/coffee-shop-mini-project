@@ -4,7 +4,7 @@ import datetime
 from datetime import date, timedelta
 import random
 from faker import Faker
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Tuple
 
 fake = Faker('tr_TR')
 
@@ -55,10 +55,11 @@ class Employee:
     
 @dataclass
 class Product:
+    product_id: int  # Added an ID to map items properly
     shop_id: int
     product_name: str
     product_category: str
-    product_current_price: float
+    product_current_price: float  # Stored as float for easier calculations
     product_is_available: bool
     
 @dataclass         
@@ -71,43 +72,26 @@ class Orders:
    order_tax: float
    order_total: float
    
-   
-   
 @dataclass
-
 class OrderItem:
    shop_id: int
    order_id : int
    product_id : int
    quantity : int
-   unit_price : float
-   line_total : float
-   
-   
-   
-   
+   unit_price : float 
+   line_total : float 
    
 @dataclass
 class Payment:
-   shop_id:int
+   shop_id: int
    order_id : int
    paid_at : date
    payment_method : str
    payment_status : str
-   amount : str
-   
-   
-   
-   
+   amount : str # Keeping string type from your original schema representation
    
 PAYMENT_METHOD = ['cash', 'card']
 PAYMENT_STATUS = ['pending', 'completed', 'cancelled']
-
-
-
-
-
-
 
 generated_addresses = set()
 
@@ -378,19 +362,22 @@ def calculate_shop_price_modifier(shop: CoffeeShop, total_employees: int) -> flo
 def generate_shop_products(shop: CoffeeShop, total_employees: int) -> List[Product]:
     shop_products = []
     price_modifier = calculate_shop_price_modifier(shop, total_employees)
+    pid_counter = 1
     for category, products in PRODUCT_BASELINE.items():
         for product_name, base_price in products.items():
             if random.random() < 0.75:
                 final_price = round(base_price * price_modifier, 2)
                 is_available = random.choices([True, False], weights=[0.93, 0.07], k=1)[0]
                 new_product = Product(
+                    product_id=pid_counter,
                     shop_id=shop.shop_id,
                     product_name=product_name,
                     product_category=category,
-                    product_current_price=f"{final_price:.2f} TL",
+                    product_current_price=final_price, # Keeping numeric for float calculations
                     product_is_available=is_available
                 )
                 shop_products.append(new_product)
+                pid_counter += 1
     return shop_products   
     
 def generate_shop_staff(shop: CoffeeShop) -> List[Employee]:
@@ -435,11 +422,17 @@ def generate_shop_staff(shop: CoffeeShop) -> List[Employee]:
             
     return all_employees
 
-def generate_single_order(
+# --- UPDATED INTEGRATED TRANSACTION GENERATOR ---
+
+def generate_single_transaction(
     order_id: int, 
     shop: CoffeeShop, 
     shop_products: List[Product]
-) -> Optional[Orders]:
+) -> Optional[Tuple[Orders, List[OrderItem], Payment]]:
+    """
+    Simultaneously populates parent Order, multiple UNIQUE OrderItems with 
+    distinct quantities, and the Payment to guarantee realistic shopping carts.
+    """
     if not shop_products:
         return None  
         
@@ -452,124 +445,163 @@ def generate_single_order(
         random_days = random.randint(0, days_open)
         ordered_at = shop.shop_opened_at + timedelta(days=random_days)
         
-   serving_employee = random.choice(active_employees)
-        
     available_products = [p for p in shop_products if p.product_is_available]
     if not available_products:
         available_products = shop_products  
         
-    cart_size = random.choices([1, 2, 3, 4, 5], weights=[0.40, 0.35, 0.15, 0.07, 0.03], k=1)[0]
-    purchased_items = random.choices(available_products, k=cart_size)
+    # 1. Determine how many DISTINCT products are in this order
+    # (e.g., a customer buys 1 to 4 different types of items)
+    max_cart_variety = min(len(available_products), 4)
+    cart_variety_size = random.choices(
+        [1, 2, 3, 4], 
+        weights=[0.50, 0.35, 0.12, 0.03], 
+        k=1
+    )[0]
+    cart_variety_size = min(cart_variety_size, max_cart_variety)
     
+    # Use random.sample to guarantee we get completely unique products
+    purchased_products = random.sample(available_products, k=cart_variety_size)
+    
+    # 2. Generate child OrderItems with random quantities and sum up the exact subtotal
+    order_items = []
     subtotal = 0.0
-    for item in purchased_items:
-        price_float = float(item.product_current_price.replace(" TL", ""))
-        subtotal += price_float
+    
+    for prod in purchased_products:
+        # Every unique product now gets its own randomly assigned quantity
+        quantity = random.choices([1, 2, 3], weights=[0.85, 0.12, 0.03], k=1)[0]
+        unit_price = prod.product_current_price
+        line_total = round(unit_price * quantity, 2)
         
+        item = OrderItem(
+            shop_id=shop.shop_id,
+            order_id=order_id,
+            product_id=prod.product_id,
+            quantity=quantity,
+            unit_price=unit_price,
+            line_total=line_total
+        )
+        order_items.append(item)
+        subtotal += line_total
+        
+    subtotal = round(subtotal, 2)
     tax_rate = 0.10 
     tax = round(subtotal * tax_rate, 2)
     total = round(subtotal + tax, 2)
     
-    status = random.choices(
+    
+    order_status = random.choices(
         ['completed', 'cancelled', 'refunded'], 
         weights=[0.95, 0.03, 0.02], 
         k=1
     )[0]
     
-    return Orders(
+   
+    order = Orders(
         order_id=order_id,
         shop_id=shop.shop_id,
         ordered_at=ordered_at,
-        order_status=status,
-        order_subtotal=round(subtotal, 2),
+        order_status=order_status,
+        order_subtotal=subtotal,
         order_tax=tax,
         order_total=total
     )
+    
+    
+    pay_method = random.choice(PAYMENT_METHOD)
+    
+    if order_status == 'completed':
+        pay_status = 'completed'
+    elif order_status == 'cancelled':
+        pay_status = 'cancelled'
+    else: # refunded
+        pay_status = random.choice(['completed', 'cancelled'])
+
+    payment = Payment(
+        shop_id=shop.shop_id,
+        order_id=order_id,
+        paid_at=ordered_at,
+        payment_method=pay_method,
+        payment_status=pay_status,
+        amount=f"{total:.2f} TL"
+    )
+    
+    return order, order_items, payment
 
 
-# ========== MAIN EXECUTION ==========
 if __name__ == "__main__":
-    # Create multiple shops
     print("Creating coffee shops...")
     shops = []
-    num_shops = 5  # Generate 5 shops for demo
+    num_shops = 5  
     
     for i in range(1, num_shops + 1):
         shop = generate_coffee_shop(i)
         shops.append(shop)
         print(f"  Shop #{i}: {shop.shop_name} in {shop.shop_address.district}, {shop.shop_address.city}")
     
-    # Generate employees and products for each shop
     print("\nGenerating employees and products...")
     all_employees = []
     employees_by_shop = {}
     products_by_shop = {}
     
     for shop in shops:
-        # Generate employees
         employees = generate_shop_staff(shop)
         all_employees.extend(employees)
         employees_by_shop[shop.shop_id] = employees
         
-        # Count active employees for product pricing
         active_employees = [e for e in employees if e.employee_current_status == 'active']
-        
-        # Generate products
         products = generate_shop_products(shop, len(active_employees))
         products_by_shop[shop.shop_id] = products
         
         print(f"  {shop.shop_name}: {len(employees)} employees ({len(active_employees)} active), {len(products)} products")
     
-    # Generate orders for all shops
     print("\n" + "="*60)
-    print("GENERATING ORDERS FOR ALL SHOPS")
+    print("GENERATING INTERLOCKING TRANSACTION ENTRIES")
     print("="*60)
     
     all_orders: List[Orders] = []
+    all_order_items: List[OrderItem] = []
+    all_payments: List[Payment] = []
     order_id_counter = 10001
     
     for shop in shops:
-        active_employees = [emp for emp in employees_by_shop[shop.shop_id] if emp.employee_current_status == 'active']
         shop_products = products_by_shop[shop.shop_id]
-        
         days_open = (date.today() - shop.shop_opened_at).days
         order_rate = random.uniform(0.1, 0.4)
         num_orders = int(days_open * order_rate)
         num_orders = max(5, num_orders)
         
         print(f"\nShop: '{shop.shop_name}' (ID: {shop.shop_id})")
-        print(f"  -> Opened on: {shop.shop_opened_at} ({days_open} days open)")
-        print(f"  -> Generating {num_orders} orders...")
+        print(f"  -> Generating {num_orders} orders & items...")
         
         for _ in range(num_orders):
-            order = generate_single_order(order_id_counter, shop, shop_products)
-            if order:
+            transaction = generate_single_transaction(order_id_counter, shop, shop_products)
+            if transaction:
+                order, items, payment = transaction
                 all_orders.append(order)
+                all_order_items.extend(items)
+                all_payments.append(payment)
                 order_id_counter += 1
     
     print(f"\n{'='*60}")
-    print(f"SUCCESSFULLY GENERATED {len(all_orders)} ORDERS ACROSS {len(shops)} SHOPS!")
+    print(f"GENERATION COMPLETE!")
+    print(f"  Total Orders: {len(all_orders)}")
+    print(f"  Total OrderItems: {len(all_order_items)}")
+    print(f"  Total Payments: {len(all_payments)}")
     print(f"{'='*60}")
     
-    # Display sample orders
-    print("\nSample orders:")
-    for order in all_orders:
+   
+    print("\nSample Transaction Match Checking (First 5 orders):")
+    for idx, order in enumerate(all_orders[:5]):
         shop = next(s for s in shops if s.shop_id == order.shop_id)
-        print(f"{order.order_id:<12} {shop.shop_name:<25} {str(order.ordered_at):<12} {order.order_status:<12} ₺{order.order_subtotal:<11.2f} ₺{order.order_tax:<11.2f} ₺{order.order_total:<11.2f}")
-    
-    # Summary by shop
-    print("\n" + "="*80)
-    print("ORDER SUMMARY BY SHOP:")
-    print("="*80)
-    
-    for shop in shops:
-        shop_orders = [o for o in all_orders if o.shop_id == shop.shop_id]
-        total_revenue = sum(o.order_total for o in shop_orders if o.order_status == 'completed')
-        completed = sum(1 for o in shop_orders if o.order_status == 'completed')
-        cancelled = sum(1 for o in shop_orders if o.order_status == 'cancelled')
-        refunded = sum(1 for o in shop_orders if o.order_status == 'refunded')
+        print(f"\nOrder #{order.order_id} | Shop: {shop.shop_name} | Status: {order.order_status} | Total: ₺{order.order_total}")
         
-        print(f"\n{shop.shop_name}:")
-        print(f"  Total Orders: {len(shop_orders)}")
-        print(f"  Completed: {completed} | Cancelled: {cancelled} | Refunded: {refunded}")
-        print(f"  Total Revenue (completed only): ₺{total_revenue:.2f}")
+       
+        matching_items = [item for item in all_order_items if item.order_id == order.order_id]
+        print("  Items Purchased:")
+        for item in matching_items:
+            prod_name = next(p.product_name for p in products_by_shop[shop.shop_id] if p.product_id == item.product_id)
+            print(f"    - {prod_name} | Qty: {item.quantity} | Unit Price: ₺{item.unit_price} | Line Total: ₺{item.line_total}")
+            
+        
+        matching_pay = next(p for p in all_payments if p.order_id == order.order_id)
+        print(f"  Associated Payment: Method: {matching_pay.payment_method} | Status: {matching_pay.payment_status} | Paid amount: {matching_pay.amount}")
