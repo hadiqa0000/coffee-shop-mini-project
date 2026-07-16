@@ -5,6 +5,7 @@ CREATE TABLE CoffeeShop(
     shop_phone VARCHAR(11) NOT NULL,
     shop_opened_at DATE NOT NULL,
     operating_hours JSONB NOT NULL,
+    shop_markup_multiplier REAL NOT NULL,
     PRIMARY KEY(shop_id)
 );
 

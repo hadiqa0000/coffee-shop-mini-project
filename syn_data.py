@@ -535,9 +535,6 @@ if __name__ == "__main__":
         for p in prods
     }
 
-    # ==========================================
-    # DUMP TABLES
-    # ==========================================
     print(f"\n[TABLE] COFFEE_SHOPS ({len(shops)} record(s))")
     print("-" * 120)
     for s in shops:
@@ -551,9 +548,7 @@ if __name__ == "__main__":
         full_name = f"{e.employee_first_name}{middle} {e.employee_surname_name}"
         print(f"{e.shop_id:<6} | {full_name:<30} | {e.employee_gender:<8} | {str(e.employee_dob):<12} | {e.employee_role:<10} | {str(e.employee_hire_date):<12} | {e.employee_current_status:<11} | {e.reason_for_suspension}")
 
-    # ==========================================
-    # DUMP ALL ORDERS (BUFFERED RENDER)
-    # ==========================================
+
     print(f"\n[TABLE] INTERLOCKING TRANSACTION LEDGER ({len(all_orders)} orders generated)")
     print("=" * 120)
     
