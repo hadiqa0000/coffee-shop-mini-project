@@ -2,29 +2,27 @@ CREATE TABLE CoffeeShop(
     shop_id BIGINT GENERATED ALWAYS AS IDENTITY,
     shop_name VARCHAR(30) NOT NULL,
     shop_address VARCHAR(255) NOT NULL,
-    shop_phone VARCHAR(11) NOT NULL,
+    shop_phone VARCHAR(15) NOT NULL,
     shop_opened_at DATE NOT NULL,
     operating_hours JSONB NOT NULL,
     shop_markup_multiplier NUMERIC(3, 2) NOT NULL,
     PRIMARY KEY(shop_id)
 );
-
 CREATE TABLE Employee(
     employee_id BIGINT GENERATED ALWAYS AS IDENTITY,
     shop_id BIGINT NOT NULL,
     employee_first_name VARCHAR(20) NOT NULL,
     employee_middle_name VARCHAR(20) NULL,
     employee_surname_name VARCHAR(20) NOT NULL,
-    employee_gender VARCHAR(10) NOT NULL, CHECK(employee_gender IN('male', 'female', 'intersex')),
+    employee_gender VARCHAR(10) NOT NULL CHECK(employee_gender IN('male', 'female', 'intersex')),
     employee_dob DATE NOT NULL,
     employee_role VARCHAR(20) NOT NULL CHECK (employee_role IN ('cashier','manager','barista', 'waiter')),
     employee_hire_date DATE NOT NULL,
     employee_current_status VARCHAR(15) NOT NULL DEFAULT 'active' CHECK(employee_current_status IN('active', 'suspended', 'terminated')),
-    reason_for_suspension VARCHAR(15)  NULL DEFAULT 'active' CHECK(reason_for_suspension IN('maternity leave', 'military service')),
+    reason_for_suspension VARCHAR(20) NULL DEFAULT NULL CHECK(reason_for_suspension IN('maternity leave', 'military service')),
     PRIMARY KEY(shop_id, employee_id),
     FOREIGN KEY (shop_id) REFERENCES CoffeeShop(shop_id) ON DELETE CASCADE
 ); 
-
 CREATE TABLE Product(
     product_id BIGINT GENERATED ALWAYS AS IDENTITY,
     shop_id BIGINT NOT NULL,
@@ -35,12 +33,11 @@ CREATE TABLE Product(
     PRIMARY KEY(shop_id, product_id),
     FOREIGN KEY (shop_id) REFERENCES CoffeeShop(shop_id) ON DELETE CASCADE
 );
-
 CREATE TABLE Orders(
     shop_id BIGINT NOT NULL,
     order_id BIGINT GENERATED ALWAYS AS IDENTITY,
     employee_id BIGINT NOT NULL,
-    ordered_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, --timestamp, which means date and time 
+    ordered_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, 
     order_status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (order_status IN('pending', 'served', 'cancelled')),
     order_subtotal DECIMAL(12,2) NOT NULL,
     order_tax DECIMAL(15,2) NOT NULL,
@@ -50,7 +47,6 @@ CREATE TABLE Orders(
     FOREIGN KEY(shop_id) REFERENCES CoffeeShop(shop_id) ON DELETE CASCADE,
     FOREIGN KEY (shop_id, employee_id) REFERENCES Employee(shop_id, employee_id)
 );
-
 CREATE TABLE OrderItem(
     shop_id BIGINT NOT NULL,
     order_item_id BIGINT GENERATED ALWAYS AS IDENTITY,
@@ -63,15 +59,14 @@ CREATE TABLE OrderItem(
     FOREIGN KEY(shop_id, order_id) REFERENCES Orders(shop_id, order_id) ON DELETE CASCADE,
     FOREIGN KEY(shop_id, product_id) REFERENCES Product(shop_id, product_id) ON DELETE CASCADE
 );
-
 CREATE TABLE Payment(
     payment_id BIGINT GENERATED ALWAYS AS IDENTITY,
     shop_id BIGINT NOT NULL,
     order_id BIGINT NOT NULL,
-    paid_at TIMESTAMP NULL, --cannot be before shop_opened_at, it is a timestamp, which means date AND time
+    paid_at TIMESTAMP NULL, 
     payment_method VARCHAR(20) CHECK (payment_method IN ('cash', 'card')),
     payment_status VARCHAR(20) DEFAULT 'completed' CHECK(payment_status IN('pending', 'completed', 'cancelled')),
-    payment_amount DECIMAL(12,2) NOT NULL, --should be equal to order_total
+    payment_amount DECIMAL(12,2) NOT NULL, 
     PRIMARY KEY(shop_id, payment_id),
     FOREIGN KEY(shop_id, order_id) REFERENCES Orders(shop_id, order_id) ON DELETE CASCADE
 );

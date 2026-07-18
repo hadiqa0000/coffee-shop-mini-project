@@ -7,6 +7,7 @@ from faker import Faker
 from typing import Optional, List, Dict, Tuple
 import psycopg2
 import json
+import re
 
 fake = Faker('tr_TR')
 
@@ -65,7 +66,8 @@ class Employee:
     employee_hire_date: date
     employee_current_status: str  # 'active', 'suspended', 'terminated'
     employee_middle_name: Optional[str] = None
-    reason_for_suspension: str = 'active'  
+    # FIX: Changed default from 'active' to None to align with database constraint (CHECK constraint / NULL)
+    reason_for_suspension: Optional[str] = None  
     
 @dataclass
 class Product:
@@ -148,10 +150,15 @@ generated_phones = set()
 
 def generate_unique_phone() -> str:
     while True:
-        phone = fake.phone_number()
+        raw_phone = fake.phone_number()
         if phone not in generated_phones:
             generated_phones.add(phone)
             return phone
+            
+            
+            
+            
+
 
 def minutes_to_time(minutes: float, step_minutes: int = 30) -> time:
     rounded_minutes = int(round(minutes / step_minutes) * step_minutes)
@@ -294,7 +301,8 @@ def generate_employee(parent_shop: CoffeeShop, assigned_role: str) -> Employee:
         employee_role=assigned_role,
         employee_hire_date=hire_date,
         employee_current_status=status,
-        reason_for_suspension=suspension_reason if suspension_reason else 'active'
+        # FIX: Changed fallback default here from 'active' to None to prevent DB check constraint violation
+        reason_for_suspension=suspension_reason if suspension_reason else None
     )
 
 PRODUCT_BASELINE = {
@@ -467,28 +475,12 @@ def generate_single_transaction(
     
     return order, order_items, payment
 
-
 if __name__ == "__main__":
-    print("=" * 80)
-    print("                      COFFEE SHOP GENERATOR (OPTIMIZED)                        ")
-    print("=" * 80)
-
-    while True:
-        user_input = input("Enter the number of coffee shops you want to generate: ").strip()
-        try:
-            num_shops = int(user_input)
-            if num_shops <= 0:
-                print("Please enter a positive number greater than 0.")
-                continue
-            break
-        except ValueError:
-            print(f"Invalid input '{user_input}'. Please enter a valid integer (e.g., 3).")
-
-    print(f"\nGenerating data for {num_shops} coffee shop(s)...\n")
-
-    shops = []
-    for i in range(1, num_shops + 1):
-        shops.append(generate_coffee_shop(i))
+    # 1. Generate the Python objects first
+    user_input = input("Enter the number of coffee shops you want to generate: ").strip()
+    num_shops = int(user_input)
+    
+    shops = [generate_coffee_shop(i) for i in range(1, num_shops + 1)]
     
     all_employees = []
     employees_by_shop = {}
@@ -500,12 +492,11 @@ if __name__ == "__main__":
         employees_by_shop[shop.shop_id] = employees
         
         active_employees = [e for e in employees if e.employee_current_status == 'active']
-        products = generate_shop_products(shop, len(active_employees))
-        products_by_shop[shop.shop_id] = products
+        products_by_shop[shop.shop_id] = generate_shop_products(shop, len(active_employees))
 
-    all_orders: List[Orders] = []
-    all_order_items: List[OrderItem] = []
-    all_payments: List[Payment] = []
+    all_orders = []
+    all_order_items = []
+    all_payments = []
     order_id_counter = 10001
     
     for shop in shops:
@@ -524,51 +515,103 @@ if __name__ == "__main__":
                 all_payments.append(payment)
                 order_id_counter += 1
 
-    print("Indexing generated data for instant printing...")
-    items_by_order: Dict[int, List[OrderItem]] = {}
-    for item in all_order_items:
-        items_by_order.setdefault(item.order_id, []).append(item)
-        
-    payments_by_order: Dict[int, Payment] = {p.order_id: p for p in all_payments}
-    
-    products_registry: Dict[Tuple[int, int], str] = {
-        (p.shop_id, p.product_id): p.product_name 
-        for shop_id, prods in products_by_shop.items() 
-        for p in prods
-    }
+    # 2. Connect to your PostgreSQL database
+    try:
+        conn = psycopg2.connect(
+            dbname="postgres",
+            user="hadiqaimrannn0",
+            password="240303924",
+            host="localhost",
+            port="5432"
+        )
+        cursor = conn.cursor()
+        print("\nConnected to PostgreSQL. Inserting data...")
 
-    print(f"\n[TABLE] COFFEE_SHOPS ({len(shops)} record(s))")
-    print("-" * 120)
-    for s in shops:
-        hours_str = ", ".join([f"{h[0].strftime('%H:%M')}-{h[1].strftime('%H:%M')}" for h in s.operating_hours])
-        print(f"{s.shop_id:<5} | {s.shop_name:<25} | {s.shop_phone:<20} | {str(s.shop_opened_at):<12} | {hours_str:<15} | {s.shop_address.to_string()}")
+        # --- INSERT COFFEE SHOPS ---
+        shop_id_map = {} 
+        for s in shops:
+            hours_json = json.dumps([{"open": h[0].strftime('%H:%M'), "close": h[1].strftime('%H:%M')} for h in s.operating_hours])
+            
+            cursor.execute("""
+                INSERT INTO CoffeeShop (shop_name, shop_address, shop_phone, shop_opened_at, operating_hours, shop_markup_multiplier)
+                VALUES (%s, %s, %s, %s, %s, %s) RETURNING shop_id;
+            """, (s.shop_name, s.shop_address.to_string(), s.shop_phone, s.shop_opened_at, hours_json, s.shop_markup_multiplier))
+            
+            inserted_id = cursor.fetchone()[0]
+            shop_id_map[s.shop_id] = inserted_id
 
-    print(f"\n[TABLE] EMPLOYEES ({len(all_employees)} record(s))")
-    print("-" * 140)
-    for e in all_employees:
-        middle = f" {e.employee_middle_name}" if e.employee_middle_name else ""
-        full_name = f"{e.employee_first_name}{middle} {e.employee_surname_name}"
-        print(f"{e.shop_id:<6} | {full_name:<30} | {e.employee_gender:<8} | {str(e.employee_dob):<12} | {e.employee_role:<10} | {str(e.employee_hire_date):<12} | {e.employee_current_status:<11} | {e.reason_for_suspension}")
+        # --- INSERT EMPLOYEES ---
+        employee_id_map = {} 
+        for idx, e in enumerate(all_employees):
+            db_shop_id = shop_id_map[e.shop_id]
+            cursor.execute("""
+                INSERT INTO Employee (shop_id, employee_first_name, employee_middle_name, employee_surname_name, employee_gender, employee_dob, employee_role, employee_hire_date, employee_current_status, reason_for_suspension)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING employee_id;
+            """, (db_shop_id, e.employee_first_name, e.employee_middle_name, e.employee_surname_name, e.employee_gender, e.employee_dob, e.employee_role, e.employee_hire_date, e.employee_current_status, e.reason_for_suspension))
+            
+            inserted_emp_id = cursor.fetchone()[0]
+            employee_id_map[(e.shop_id, idx)] = inserted_emp_id 
 
+        # --- INSERT PRODUCTS ---
+        product_id_map = {} 
+        for shop_id, prods in products_by_shop.items():
+            db_shop_id = shop_id_map[shop_id]
+            for p in prods:
+                cursor.execute("""
+                    INSERT INTO Product (shop_id, product_name, product_category, product_current_price, product_is_available)
+                    VALUES (%s, %s, %s, %s, %s) RETURNING product_id;
+                """, (db_shop_id, p.product_name, p.product_category, p.product_current_price, p.product_is_available))
+                
+                inserted_prod_id = cursor.fetchone()[0]
+                product_id_map[(shop_id, p.product_id)] = inserted_prod_id
 
-    print(f"\n[TABLE] INTERLOCKING TRANSACTION LEDGER ({len(all_orders)} orders generated)")
-    print("=" * 120)
-    
-    buffer = []
-    for order in all_orders:
-        matching_items = items_by_order.get(order.order_id, [])
-        matching_pay = payments_by_order.get(order.order_id, None)
-        
-        buffer.append(f"ORDER #{order.order_id} | Shop: {order.shop_id} | Year Context: {order.ordered_at.year} | Status: {order.order_status.upper()}")
-        buffer.append(f"  Subtotal: ₺{order.order_subtotal:.2f} | Tax (10%): ₺{order.order_tax:.2f} | Total Bill: ₺{order.order_total:.2f}")
-        
-        if matching_pay:
-            buffer.append(f"  PAYMENT: Method: {matching_pay.payment_method.upper()} | Status: {matching_pay.payment_status.upper()} | Amount Charged: ₺{matching_pay.amount:.2f}")
-        
-        buffer.append("  ITEMS PURCHASED:")
-        for item in matching_items:
-            prod_name = products_registry.get((order.shop_id, item.product_id), "Unknown Product")
-            buffer.append(f"    - {prod_name:<30} x{item.quantity:<2} | Price: ₺{item.unit_price:<8.2f} | Total: ₺{item.line_total:.2f}")
-        buffer.append("~" * 120)
-        
-    print("\n".join(buffer))
+        # --- INSERT ORDERS ---
+        order_id_map = {} 
+        for order in all_orders:
+            db_shop_id = shop_id_map[order.shop_id]
+            assigned_emp_id = [emp_id for (s_id, _), emp_id in employee_id_map.items() if s_id == order.shop_id][0]
+
+            cursor.execute("""
+                INSERT INTO Orders (shop_id, employee_id, ordered_at, order_status, order_subtotal, order_tax, order_total)
+                VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING order_id;
+            """, (db_shop_id, assigned_emp_id, order.ordered_at, order.order_status, order.order_subtotal, order.order_tax, order.order_total))
+            
+            inserted_order_id = cursor.fetchone()[0]
+            order_id_map[order.order_id] = inserted_order_id
+
+        # --- INSERT ORDER ITEMS ---
+        for item in all_order_items:
+            db_shop_id = shop_id_map[item.shop_id]
+            db_order_id = order_id_map[item.order_id]
+            db_product_id = product_id_map[(item.shop_id, item.product_id)]
+
+            cursor.execute("""
+                INSERT INTO OrderItem (shop_id, order_id, product_id, quantity, unit_price)
+                VALUES (%s, %s, %s, %s, %s);
+            """, (db_shop_id, db_order_id, db_product_id, item.quantity, item.unit_price))
+
+        # --- INSERT PAYMENTS ---
+        for pay in all_payments:
+            db_shop_id = shop_id_map[pay.shop_id]
+            db_order_id = order_id_map[pay.order_id]
+            
+            cursor.execute("""
+                INSERT INTO Payment (shop_id, order_id, paid_at, payment_method, payment_status, payment_amount)
+                VALUES (%s, %s, %s, %s, %s, %s);
+            """, (db_shop_id, db_order_id, pay.paid_at, pay.payment_method, pay.payment_status, pay.amount))
+
+        conn.commit()
+        print("Data successfully generated and written to Database!")
+
+    except Exception as error:
+        print("Error while interacting with PostgreSQL:", error)
+        if conn:
+            conn.rollback()
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+            
+            
+            
