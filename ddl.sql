@@ -2,7 +2,7 @@ CREATE TABLE CoffeeShop(
     shop_id BIGINT GENERATED ALWAYS AS IDENTITY,
     shop_name VARCHAR(30) NOT NULL,
     shop_address VARCHAR(255) NOT NULL,
-    shop_phone VARCHAR(15) NOT NULL,
+    shop_phone VARCHAR(11) NOT NULL,
     shop_opened_at DATE NOT NULL,
     operating_hours JSONB NOT NULL,
     shop_markup_multiplier NUMERIC(3, 2) NOT NULL,

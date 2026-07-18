@@ -154,18 +154,10 @@ def generate_unique_phone() -> str:
         clean_phone = re.sub(r'\D', '', raw_phone)
         if len(clean_phone) > 11:
             clean_phone = clean_phone[-11:]
-            
-            
-            
         if clean_phone not in generated_phones and len(clean_phone) <= 11:
             generated_phones.add(clean_phone)
             return clean_phone
             
-            
-            
-            
-
-
 def minutes_to_time(minutes: float, step_minutes: int = 30) -> time:
     rounded_minutes = int(round(minutes / step_minutes) * step_minutes)
     total_minutes = rounded_minutes % 1440
@@ -464,7 +456,7 @@ def generate_single_transaction(
     tax = round(subtotal * 0.10, 2)
     total = round(subtotal + tax, 2)
     
-    order_status = random.choices(['completed', 'cancelled', 'refunded'], weights=[0.95, 0.03, 0.02], k=1)[0]
+    order_status = random.choices(['served', 'cancelled', 'pending'], weights=[0.70, 0.25, 0.5], k=1)[0]
     
     order = Orders(
         order_id=order_id, shop_id=shop.shop_id, ordered_at=ordered_at,
