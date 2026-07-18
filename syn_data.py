@@ -151,6 +151,12 @@ generated_phones = set()
 def generate_unique_phone() -> str:
     while True:
         raw_phone = fake.phone_number()
+        clean_phone = re.sub(r'\D', '', raw_phone)
+        if len(clean_phone) > 11:
+            clean_phone = clean_phone[-11:]
+            
+            
+            
         if phone not in generated_phones:
             generated_phones.add(phone)
             return phone
