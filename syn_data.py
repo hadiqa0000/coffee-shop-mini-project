@@ -157,9 +157,9 @@ def generate_unique_phone() -> str:
             
             
             
-        if phone not in generated_phones:
-            generated_phones.add(phone)
-            return phone
+        if clean_phone not in generated_phones and len(clean_phone) <= 11:
+            generated_phones.add(clean_phone)
+            return clean_phone
             
             
             
