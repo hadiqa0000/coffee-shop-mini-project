@@ -6,6 +6,7 @@ import random
 from faker import Faker
 from typing import Optional, List, Dict, Tuple
 import psycopg2
+from psycopg2.extras import execute_values  # <-- Added for high-speed bulk inserts
 import json
 import re
 
@@ -64,9 +65,8 @@ class Employee:
     employee_dob: date 
     employee_role: str
     employee_hire_date: date
-    employee_current_status: str  # 'active', 'suspended', 'terminated'
+    employee_current_status: str
     employee_middle_name: Optional[str] = None
-    # FIX: Changed default from 'active' to None to align with database constraint (CHECK constraint / NULL)
     reason_for_suspension: Optional[str] = None  
     
 @dataclass
@@ -83,7 +83,7 @@ class Orders:
    order_id: int  
    shop_id: int
    ordered_at: datetime
-   order_status: str  # 'completed', 'cancelled', 'refunded'
+   order_status: str  
    order_subtotal: float
    order_tax: float
    order_total: float
@@ -118,16 +118,14 @@ def generate_unique_address() -> Address:
         building_no = str(random.randint(1, 120))
         street_no = str(random.randint(1, 180))
         
+        
+        addr = Address(building_no=building_no, street_no=street_no, district=district, city=city)
+        address_string = addr.to_string()
         address_token = (street_no, building_no, district, city)
         
-        if address_token not in generated_addresses:
+        if address_token not in generated_addresses and address_string not in existing_address_strings:
             generated_addresses.add(address_token)
-            return Address(
-                building_no=building_no,
-                street_no=street_no,
-                district=district,
-                city=city
-            )
+            return addr
 
 SHOP_SUFFIXES = ["Shop", "Cafe", "Coffee", "Roasters", "Corner"]
 generated_shop_names = set()
@@ -182,7 +180,6 @@ def generate_coffee_shop(shop_index: int) -> CoffeeShop:
     closing_time = minutes_to_time(close_minutes)
     operating_hours = [(opening_time, closing_time)]
     
-    # Assign a unique brand pricing identity (+/- 5% markup deviation)
     shop_markup_multiplier = random.uniform(0.95, 1.05)
     
     return CoffeeShop(
@@ -270,7 +267,7 @@ def determine_employment_status(gender: str, dob: date, hire_date: date) -> tupl
             
     if gender_lower == 'female' and 27 <= current_age <= 30:
         if random.random() < 0.18:
-            if random.random() < 0.56:  
+            if random.random() < 0.56: 
                 return ('terminated', None)
             elif days_since_hired + 120 <= expected_tenure_days and random.random() >= 0.75:
                 return ('suspended', 'maternity leave')
@@ -285,9 +282,9 @@ def generate_employee(parent_shop: CoffeeShop, assigned_role: str) -> Employee:
     first_name = generate_employee_first_name(gender)
     middle_name = generate_employee_middle_name(gender, first_name)
     surname = generate_employee_surname_name()
-    hire_date = generate_employee_hire_date(parent_shop.shop_opened_at)
-    dob = generate_employee_dob(hire_date)
-    status, suspension_reason = determine_employment_status(gender, dob, hire_date)
+    order_hire_date = generate_employee_hire_date(parent_shop.shop_opened_at)
+    dob = generate_employee_dob(order_hire_date)
+    status, suspension_reason = determine_employment_status(gender, dob, order_hire_date)
     
     return Employee(
         shop_id=parent_shop.shop_id,
@@ -297,9 +294,8 @@ def generate_employee(parent_shop: CoffeeShop, assigned_role: str) -> Employee:
         employee_gender=gender.lower(),
         employee_dob=dob,
         employee_role=assigned_role,
-        employee_hire_date=hire_date,
+        employee_hire_date=order_hire_date,
         employee_current_status=status,
-        # FIX: Changed fallback default here from 'active' to None to prevent DB check constraint violation
         reason_for_suspension=suspension_reason if suspension_reason else None
     )
 
@@ -340,7 +336,6 @@ PRODUCT_BASELINE = {
 }
 
 def calculate_historical_price(base_price: float, shop: CoffeeShop, total_employees: int, target_year: int) -> float:
-    """Calculates multi-factored product prices dynamically aligned to a precise target calendar year."""
     inflation_factor = INFLATION_DATA.get(target_year, 10.658)
     location_premium = LOCATION_PREMIUMS.get(shop.shop_address.district, 1.00)
     staff_factor = get_staff_factor(total_employees)
@@ -351,7 +346,6 @@ def calculate_historical_price(base_price: float, shop: CoffeeShop, total_employ
 def generate_shop_products(shop: CoffeeShop, total_employees: int) -> List[Product]:
     shop_products = []
     pid_counter = 1
-    # Baseline inventory setup configured initially to current 2026 pricing bounds
     for category, products in PRODUCT_BASELINE.items():
         for product_name, base_price in products.items():
             if random.random() < 0.75:
@@ -433,11 +427,9 @@ def generate_single_transaction(
     order_items = []
     subtotal = 0.0
     
-    # Process historical multi-factor values linked cleanly to transaction year
     for prod in purchased_products:
         quantity = random.choices([1, 2, 3], weights=[0.85, 0.12, 0.03], k=1)[0]
         
-        # Pull initial core product baseline matrix entry
         base_uninflated_price = PRODUCT_BASELINE[prod.product_category][prod.product_name]
         unit_price = calculate_historical_price(base_uninflated_price, shop, total_employees, ordered_at.year)
         line_total = round(unit_price * quantity, 2)
@@ -456,7 +448,7 @@ def generate_single_transaction(
     tax = round(subtotal * 0.10, 2)
     total = round(subtotal + tax, 2)
     
-    order_status = random.choices(['served', 'cancelled', 'pending'], weights=[0.70, 0.25, 0.5], k=1)[0]
+    order_status = random.choices(['pending', 'served', 'cancelled'], weights=[0.70, 0.25, 0.05], k=1)[0]
     
     order = Orders(
         order_id=order_id, shop_id=shop.shop_id, ordered_at=ordered_at,
@@ -474,10 +466,10 @@ def generate_single_transaction(
     return order, order_items, payment
 
 if __name__ == "__main__":
-    # 1. Generate the Python objects first
     user_input = input("Enter the number of coffee shops you want to generate: ").strip()
     num_shops = int(user_input)
     
+    print("\nGenerating dummy objects in memory...")
     shops = [generate_coffee_shop(i) for i in range(1, num_shops + 1)]
     
     all_employees = []
@@ -513,7 +505,6 @@ if __name__ == "__main__":
                 all_payments.append(payment)
                 order_id_counter += 1
 
-    # 2. Connect to your PostgreSQL database
     try:
         conn = psycopg2.connect(
             dbname="postgres",
@@ -523,86 +514,137 @@ if __name__ == "__main__":
             port="5432"
         )
         cursor = conn.cursor()
-        print("\nConnected to PostgreSQL. Inserting data...")
+        print("Connected to PostgreSQL. Starting high-speed batch operations...")
 
-        # --- INSERT COFFEE SHOPS ---
-        shop_id_map = {} 
+        # --- BULK INSERT COFFEE SHOPS ---
+        print("Inserting Coffee Shops...")
+        shop_id_map = {}
         for s in shops:
             hours_json = json.dumps([{"open": h[0].strftime('%H:%M'), "close": h[1].strftime('%H:%M')} for h in s.operating_hours])
-            
             cursor.execute("""
                 INSERT INTO CoffeeShop (shop_name, shop_address, shop_phone, shop_opened_at, operating_hours, shop_markup_multiplier)
                 VALUES (%s, %s, %s, %s, %s, %s) RETURNING shop_id;
             """, (s.shop_name, s.shop_address.to_string(), s.shop_phone, s.shop_opened_at, hours_json, s.shop_markup_multiplier))
-            
-            inserted_id = cursor.fetchone()[0]
-            shop_id_map[s.shop_id] = inserted_id
+            shop_id_map[s.shop_id] = cursor.fetchone()[0]
 
-        # --- INSERT EMPLOYEES ---
-        employee_id_map = {} 
+        # --- BULK INSERT EMPLOYEES ---
+        print("Inserting Employees...")
+        employee_id_map = {}
+        emp_records_to_insert = []
+        emp_lookup_helper = []  # To map the returned IDs back to our memory map safely
+        
         for idx, e in enumerate(all_employees):
             db_shop_id = shop_id_map[e.shop_id]
-            cursor.execute("""
-                INSERT INTO Employee (shop_id, employee_first_name, employee_middle_name, employee_surname_name, employee_gender, employee_dob, employee_role, employee_hire_date, employee_current_status, reason_for_suspension)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING employee_id;
-            """, (db_shop_id, e.employee_first_name, e.employee_middle_name, e.employee_surname_name, e.employee_gender, e.employee_dob, e.employee_role, e.employee_hire_date, e.employee_current_status, e.reason_for_suspension))
+            emp_records_to_insert.append((
+                db_shop_id, e.employee_first_name, e.employee_middle_name, e.employee_surname_name,
+                e.employee_gender, e.employee_dob, e.employee_role, e.employee_hire_date,
+                e.employee_current_status, e.reason_for_suspension
+            ))
+            emp_lookup_helper.append((e.shop_id, idx))
             
-            inserted_emp_id = cursor.fetchone()[0]
-            employee_id_map[(e.shop_id, idx)] = inserted_emp_id 
+        inserted_emp_ids = execute_values(
+            cursor, 
+            """INSERT INTO Employee (shop_id, employee_first_name, employee_middle_name, employee_surname_name, employee_gender, employee_dob, employee_role, employee_hire_date, employee_current_status, reason_for_suspension) 
+               VALUES %s RETURNING employee_id;""", 
+            emp_records_to_insert, 
+            fetch=True
+        )
+        for lookup_key, res_row in zip(emp_lookup_helper, inserted_emp_ids):
+            employee_id_map[lookup_key] = res_row[0]
 
-        # --- INSERT PRODUCTS ---
-        product_id_map = {} 
+        # --- BULK INSERT PRODUCTS ---
+        print("Inserting Products...")
+        product_id_map = {}
+        prod_records_to_insert = []
+        prod_lookup_helper = []
+        
         for shop_id, prods in products_by_shop.items():
             db_shop_id = shop_id_map[shop_id]
             for p in prods:
-                cursor.execute("""
-                    INSERT INTO Product (shop_id, product_name, product_category, product_current_price, product_is_available)
-                    VALUES (%s, %s, %s, %s, %s) RETURNING product_id;
-                """, (db_shop_id, p.product_name, p.product_category, p.product_current_price, p.product_is_available))
+                prod_records_to_insert.append((
+                    db_shop_id, p.product_name, p.product_category, p.product_current_price, p.product_is_available
+                ))
+                prod_lookup_helper.append((shop_id, p.product_id))
                 
-                inserted_prod_id = cursor.fetchone()[0]
-                product_id_map[(shop_id, p.product_id)] = inserted_prod_id
+        inserted_prod_ids = execute_values(
+            cursor,
+            """INSERT INTO Product (shop_id, product_name, product_category, product_current_price, product_is_available) 
+               VALUES %s RETURNING product_id;""",
+            prod_records_to_insert,
+            fetch=True
+        )
+        for lookup_key, res_row in zip(prod_lookup_helper, inserted_prod_ids):
+            product_id_map[lookup_key] = res_row[0]
 
-        # --- INSERT ORDERS ---
-        order_id_map = {} 
+        # --- BULK INSERT ORDERS ---
+        print("Inserting Orders...")
+        order_id_map = {}
+        order_records_to_insert = []
+        order_lookup_helper = []
+        
+        # Build an easy reverse-lookup dictionary matching shop_ids to structural lists of db employee ids
+        shop_to_employees_cache = {}
+        for (s_id, _), emp_id in employee_id_map.items():
+            shop_to_employees_cache.setdefault(s_id, []).append(emp_id)
+
         for order in all_orders:
             db_shop_id = shop_id_map[order.shop_id]
-            assigned_emp_id = [emp_id for (s_id, _), emp_id in employee_id_map.items() if s_id == order.shop_id][0]
+            # FIX: Pull a dynamic employee ID belonging *only* to this shop instead of hardcoding element [0] globally
+            shop_emp_pool = shop_to_employees_cache.get(order.shop_id)
+            assigned_emp_id = random.choice(shop_emp_pool) if shop_emp_pool else None
 
-            cursor.execute("""
-                INSERT INTO Orders (shop_id, employee_id, ordered_at, order_status, order_subtotal, order_tax, order_total)
-                VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING order_id;
-            """, (db_shop_id, assigned_emp_id, order.ordered_at, order.order_status, order.order_subtotal, order.order_tax, order.order_total))
+            order_records_to_insert.append((
+                db_shop_id, assigned_emp_id, order.ordered_at, order.order_status,
+                order.order_subtotal, order.order_tax, order.order_total
+            ))
+            order_lookup_helper.append(order.order_id)
             
-            inserted_order_id = cursor.fetchone()[0]
-            order_id_map[order.order_id] = inserted_order_id
+        inserted_order_ids = execute_values(
+            cursor,
+            """INSERT INTO Orders (shop_id, employee_id, ordered_at, order_status, order_subtotal, order_tax, order_total) 
+               VALUES %s RETURNING order_id;""",
+            order_records_to_insert,
+            fetch=True
+        )
+        for old_id, res_row in zip(order_lookup_helper, inserted_order_ids):
+            order_id_map[old_id] = res_row[0]
 
-        # --- INSERT ORDER ITEMS ---
+        # --- BULK INSERT ORDER ITEMS ---
+        print("Inserting Order Items...")
+        item_records_to_insert = []
         for item in all_order_items:
             db_shop_id = shop_id_map[item.shop_id]
             db_order_id = order_id_map[item.order_id]
             db_product_id = product_id_map[(item.shop_id, item.product_id)]
+            item_records_to_insert.append((
+                db_shop_id, db_order_id, db_product_id, item.quantity, item.unit_price
+            ))
+        execute_values(
+            cursor,
+            "INSERT INTO OrderItem (shop_id, order_id, product_id, quantity, unit_price) VALUES %s;",
+            item_records_to_insert
+        )
 
-            cursor.execute("""
-                INSERT INTO OrderItem (shop_id, order_id, product_id, quantity, unit_price)
-                VALUES (%s, %s, %s, %s, %s);
-            """, (db_shop_id, db_order_id, db_product_id, item.quantity, item.unit_price))
-
-        # --- INSERT PAYMENTS ---
+        # --- BULK INSERT PAYMENTS ---
+        print("Inserting Payments...")
+        pay_records_to_insert = []
         for pay in all_payments:
             db_shop_id = shop_id_map[pay.shop_id]
             db_order_id = order_id_map[pay.order_id]
-            
-            cursor.execute("""
-                INSERT INTO Payment (shop_id, order_id, paid_at, payment_method, payment_status, payment_amount)
-                VALUES (%s, %s, %s, %s, %s, %s);
-            """, (db_shop_id, db_order_id, pay.paid_at, pay.payment_method, pay.payment_status, pay.amount))
+            pay_records_to_insert.append((
+                db_shop_id, db_order_id, pay.paid_at, pay.payment_method, pay.payment_status, pay.amount
+            ))
+        execute_values(
+            cursor,
+            "INSERT INTO Payment (shop_id, order_id, paid_at, payment_method, payment_status, payment_amount) VALUES %s;",
+            pay_records_to_insert
+        )
 
         conn.commit()
-        print("Data successfully generated and written to Database!")
+        print("\n🎉 Success! Data completely written to Database instantly!")
 
     except Exception as error:
-        print("Error while interacting with PostgreSQL:", error)
+        print("\n❌ Error while interacting with PostgreSQL:", error)
         if conn:
             conn.rollback()
     finally:
@@ -610,6 +652,3 @@ if __name__ == "__main__":
             cursor.close()
         if conn:
             conn.close()
-            
-            
-            
