@@ -9,7 +9,12 @@ DATABASE_URL = f"postgresql://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}@
 engine = create_engine(DATABASE_URL)
  dfshops = pd.read_sql_query("SELECT * FROM CoffeeShop;", engine)
  dfproducts = pd.read_sql_query("SELECT * FROM Products;", engine)
- dfemployees = pd.read_sql_query("SELECT * FROM Emolployee;", egine)
+ dfemployee = pd.read_sql_query("SELECT * FROM Employee;", egine)
  dforders = pd.read_sql_query("SELECT * FROM Orders", engine)
  dforderitem = pd.read_sql_query("SELECT * FROM OrderItem", engine)
  dfpayment = pd.read_sql_query("SELECT * FROM Payment", engine)
+ 
+ 
+ dforders['ordered_at']= pd.to_datetime(dforders['ordered_at']
+ dfemployee['employee_dob']= pd.to_datetime(dforders['employee_dob']
+ dfemployee['employee_hire_date']= pd.to_datetime(dforders['employee_hire_date']
