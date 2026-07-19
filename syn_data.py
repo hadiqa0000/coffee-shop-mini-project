@@ -11,6 +11,7 @@ import json
 import re
 
 fake = Faker('tr_TR')
+existing_address_strings = set()
 
 TURKIYE_GEOGRAPHY = {
     "Istanbul": ["Kadikoy", "Besiktas", "Fatih", "Uskudar", "Sisli", "Sariyer", "Avcilar"],
@@ -466,45 +467,13 @@ def generate_single_transaction(
     return order, order_items, payment
 
 if __name__ == "__main__":
-    user_input = input("Enter the number of coffee shops you want to generate: ").strip()
+    user_input = input("Enter the number of NEW coffee shops you want to generate: ").strip()
     num_shops = int(user_input)
-    
-    print("\nGenerating dummy objects in memory...")
-    shops = [generate_coffee_shop(i) for i in range(1, num_shops + 1)]
-    
-    all_employees = []
-    employees_by_shop = {}
-    products_by_shop = {}
-    
-    for shop in shops:
-        employees = generate_shop_staff(shop)
-        all_employees.extend(employees)
-        employees_by_shop[shop.shop_id] = employees
-        
-        active_employees = [e for e in employees if e.employee_current_status == 'active']
-        products_by_shop[shop.shop_id] = generate_shop_products(shop, len(active_employees))
 
-    all_orders = []
-    all_order_items = []
-    all_payments = []
-    order_id_counter = 10001
+    conn = None
+    cursor = None
+    start_shop_id = 1
     
-    for shop in shops:
-        shop_products = products_by_shop[shop.shop_id]
-        active_staff_count = len([e for e in employees_by_shop[shop.shop_id] if e.employee_current_status == 'active'])
-        days_open = (date.today() - shop.shop_opened_at).days
-        order_rate = random.uniform(0.1, 0.4)
-        num_orders = max(5, int(days_open * order_rate))
-        
-        for _ in range(num_orders):
-            transaction = generate_single_transaction(order_id_counter, shop, shop_products, active_staff_count)
-            if transaction:
-                order, items, payment = transaction
-                all_orders.append(order)
-                all_order_items.extend(items)
-                all_payments.append(payment)
-                order_id_counter += 1
-
     try:
         conn = psycopg2.connect(
             dbname="postgres",
@@ -514,141 +483,189 @@ if __name__ == "__main__":
             port="5432"
         )
         cursor = conn.cursor()
-        print("Connected to PostgreSQL. Starting high-speed batch operations...")
+        print("\nChecking database for existing records to prevent duplicates...")
 
-        # --- BULK INSERT COFFEE SHOPS ---
-        print("Inserting Coffee Shops...")
-        shop_id_map = {}
-        for s in shops:
-            hours_json = json.dumps([{"open": h[0].strftime('%H:%M'), "close": h[1].strftime('%H:%M')} for h in s.operating_hours])
-            cursor.execute("""
-                INSERT INTO CoffeeShop (shop_name, shop_address, shop_phone, shop_opened_at, operating_hours, shop_markup_multiplier)
-                VALUES (%s, %s, %s, %s, %s, %s) RETURNING shop_id;
-            """, (s.shop_name, s.shop_address.to_string(), s.shop_phone, s.shop_opened_at, hours_json, s.shop_markup_multiplier))
-            shop_id_map[s.shop_id] = cursor.fetchone()[0]
+        # 1. Track existing unique attributes globally
+        cursor.execute("SELECT shop_name FROM CoffeeShop;")
+        for row in cursor.fetchall():
+            generated_shop_names.add(row[0])
 
-        # --- BULK INSERT EMPLOYEES ---
-        print("Inserting Employees...")
-        employee_id_map = {}
-        emp_records_to_insert = []
-        emp_lookup_helper = []  # To map the returned IDs back to our memory map safely
+        cursor.execute("SELECT shop_phone FROM CoffeeShop;")
+        for row in cursor.fetchall():
+            generated_phones.add(row[0])
+
+        cursor.execute("SELECT shop_address FROM CoffeeShop;")
+        for row in cursor.fetchall():
+            existing_address_strings.add(row[0])
+
+        # 2. Sync starting IDs
+        cursor.execute("SELECT COALESCE(MAX(shop_id), 0) FROM CoffeeShop;")
+        start_shop_id = cursor.fetchone()[0] + 1
         
-        for idx, e in enumerate(all_employees):
-            db_shop_id = shop_id_map[e.shop_id]
-            emp_records_to_insert.append((
-                db_shop_id, e.employee_first_name, e.employee_middle_name, e.employee_surname_name,
-                e.employee_gender, e.employee_dob, e.employee_role, e.employee_hire_date,
-                e.employee_current_status, e.reason_for_suspension
-            ))
-            emp_lookup_helper.append((e.shop_id, idx))
-            
-        inserted_emp_ids = execute_values(
-            cursor, 
-            """INSERT INTO Employee (shop_id, employee_first_name, employee_middle_name, employee_surname_name, employee_gender, employee_dob, employee_role, employee_hire_date, employee_current_status, reason_for_suspension) 
-               VALUES %s RETURNING employee_id;""", 
-            emp_records_to_insert, 
-            fetch=True
-        )
-        for lookup_key, res_row in zip(emp_lookup_helper, inserted_emp_ids):
-            employee_id_map[lookup_key] = res_row[0]
-
-        # --- BULK INSERT PRODUCTS ---
-        print("Inserting Products...")
-        product_id_map = {}
-        prod_records_to_insert = []
-        prod_lookup_helper = []
+        try:
+            cursor.execute("SELECT COALESCE(MAX(order_id), 10000) FROM Orders;")
+            order_id_counter = cursor.fetchone()[0] + 1
+        except:
+            order_id_counter = 10001
         
-        for shop_id, prods in products_by_shop.items():
-            db_shop_id = shop_id_map[shop_id]
-            for p in prods:
-                prod_records_to_insert.append((
-                    db_shop_id, p.product_name, p.product_category, p.product_current_price, p.product_is_available
-                ))
-                prod_lookup_helper.append((shop_id, p.product_id))
-                
-        inserted_prod_ids = execute_values(
-            cursor,
-            """INSERT INTO Product (shop_id, product_name, product_category, product_current_price, product_is_available) 
-               VALUES %s RETURNING product_id;""",
-            prod_records_to_insert,
-            fetch=True
-        )
-        for lookup_key, res_row in zip(prod_lookup_helper, inserted_prod_ids):
-            product_id_map[lookup_key] = res_row[0]
-
-        # --- BULK INSERT ORDERS ---
-        print("Inserting Orders...")
-        order_id_map = {}
-        order_records_to_insert = []
-        order_lookup_helper = []
-        
-        # Build an easy reverse-lookup dictionary matching shop_ids to structural lists of db employee ids
-        shop_to_employees_cache = {}
-        for (s_id, _), emp_id in employee_id_map.items():
-            shop_to_employees_cache.setdefault(s_id, []).append(emp_id)
-
-        for order in all_orders:
-            db_shop_id = shop_id_map[order.shop_id]
-            # FIX: Pull a dynamic employee ID belonging *only* to this shop instead of hardcoding element [0] globally
-            shop_emp_pool = shop_to_employees_cache.get(order.shop_id)
-            assigned_emp_id = random.choice(shop_emp_pool) if shop_emp_pool else None
-
-            order_records_to_insert.append((
-                db_shop_id, assigned_emp_id, order.ordered_at, order.order_status,
-                order.order_subtotal, order.order_tax, order.order_total
-            ))
-            order_lookup_helper.append(order.order_id)
-            
-        inserted_order_ids = execute_values(
-            cursor,
-            """INSERT INTO Orders (shop_id, employee_id, ordered_at, order_status, order_subtotal, order_tax, order_total) 
-               VALUES %s RETURNING order_id;""",
-            order_records_to_insert,
-            fetch=True
-        )
-        for old_id, res_row in zip(order_lookup_helper, inserted_order_ids):
-            order_id_map[old_id] = res_row[0]
-
-        # --- BULK INSERT ORDER ITEMS ---
-        print("Inserting Order Items...")
-        item_records_to_insert = []
-        for item in all_order_items:
-            db_shop_id = shop_id_map[item.shop_id]
-            db_order_id = order_id_map[item.order_id]
-            db_product_id = product_id_map[(item.shop_id, item.product_id)]
-            item_records_to_insert.append((
-                db_shop_id, db_order_id, db_product_id, item.quantity, item.unit_price
-            ))
-        execute_values(
-            cursor,
-            "INSERT INTO OrderItem (shop_id, order_id, product_id, quantity, unit_price) VALUES %s;",
-            item_records_to_insert
-        )
-
-        # --- BULK INSERT PAYMENTS ---
-        print("Inserting Payments...")
-        pay_records_to_insert = []
-        for pay in all_payments:
-            db_shop_id = shop_id_map[pay.shop_id]
-            db_order_id = order_id_map[pay.order_id]
-            pay_records_to_insert.append((
-                db_shop_id, db_order_id, pay.paid_at, pay.payment_method, pay.payment_status, pay.amount
-            ))
-        execute_values(
-            cursor,
-            "INSERT INTO Payment (shop_id, order_id, paid_at, payment_method, payment_status, payment_amount) VALUES %s;",
-            pay_records_to_insert
-        )
-
-        conn.commit()
-        print("\n🎉 Success! Data completely written to Database instantly!")
+        print(f"-> Found {start_shop_id - 1} existing shops. Starting shop_id: {start_shop_id}, order_id: {order_id_counter}.")
 
     except Exception as error:
-        print("\n❌ Error while interacting with PostgreSQL:", error)
-        if conn:
-            conn.rollback()
+        print("\n❌ Failed to sync pre-existing database constraints:", error)
+        if conn: conn.close()
+        exit(1)
+
+    # --- CHUNKED EXECUTION CORE ---
+    CHUNK_SIZE = 50  # Keeps RAM incredibly low by clearing memory after every 50 shops
+    total_processed = 0
+    
+    print(f"\n🚀 Streaming data generation in chunks of {CHUNK_SIZE} shops...")
+    
+    try:
+        for chunk_start in range(start_shop_id, start_shop_id + num_shops, CHUNK_SIZE):
+            chunk_end = min(chunk_start + CHUNK_SIZE, start_shop_id + num_shops)
+            print(f"Processing shops {chunk_start} to {chunk_end - 1}...")
+            
+            # Generate ONLY this chunk's shops in memory
+            shops = [generate_coffee_shop(i) for i in range(chunk_start, chunk_end)]
+            
+            # --- INSERT COFFEE SHOPS FOR THIS CHUNK ---
+            shop_id_map = {}
+            for s in shops:
+                hours_json = json.dumps([{"open": h[0].strftime('%H:%M'), "close": h[1].strftime('%H:%M')} for h in s.operating_hours])
+                cursor.execute("""
+                    INSERT INTO CoffeeShop (shop_name, shop_address, shop_phone, shop_opened_at, operating_hours, shop_markup_multiplier)
+                    VALUES (%s, %s, %s, %s, %s, %s) RETURNING shop_id;
+                """, (s.shop_name, s.shop_address.to_string(), s.shop_phone, s.shop_opened_at, hours_json, s.shop_markup_multiplier))
+                shop_id_map[s.shop_id] = cursor.fetchone()[0]
+
+            # Generate child objects ONLY for this chunk
+            chunk_employees = []
+            employees_by_shop = {}
+            products_by_shop = {}
+            
+            for shop in shops:
+                employees = generate_shop_staff(shop)
+                chunk_employees.extend(employees)
+                employees_by_shop[shop.shop_id] = employees
+                
+                active_employees = [e for e in employees if e.employee_current_status == 'active']
+                products_by_shop[shop.shop_id] = generate_shop_products(shop, len(active_employees))
+
+            # --- INSERT EMPLOYEES FOR THIS CHUNK ---
+            employee_id_map = {}
+            emp_records = []
+            emp_lookup = []
+            for idx, e in enumerate(chunk_employees):
+                db_shop_id = shop_id_map[e.shop_id]
+                emp_records.append((
+                    db_shop_id, e.employee_first_name, e.employee_middle_name, e.employee_surname_name,
+                    e.employee_gender, e.employee_dob, e.employee_role, e.employee_hire_date,
+                    e.employee_current_status, e.reason_for_suspension
+                ))
+                emp_lookup.append((e.shop_id, idx))
+                
+            inserted_emp_ids = execute_values(
+                cursor, 
+                """INSERT INTO Employee (shop_id, employee_first_name, employee_middle_name, employee_surname_name, employee_gender, employee_dob, employee_role, employee_hire_date, employee_current_status, reason_for_suspension) 
+                   VALUES %s RETURNING employee_id;""", emp_records, fetch=True
+            )
+            for lookup_key, res_row in zip(emp_lookup, inserted_emp_ids):
+                employee_id_map[lookup_key] = res_row[0]
+
+            # --- INSERT PRODUCTS FOR THIS CHUNK ---
+            product_id_map = {}
+            prod_records = []
+            prod_lookup = []
+            for shop_id, prods in products_by_shop.items():
+                db_shop_id = shop_id_map[shop_id]
+                for p in prods:
+                    prod_records.append((
+                        db_shop_id, p.product_name, p.product_category, p.product_current_price, p.product_is_available
+                    ))
+                    prod_lookup.append((shop_id, p.product_id))
+                    
+            inserted_prod_ids = execute_values(
+                cursor,
+                """INSERT INTO Product (shop_id, product_name, product_category, product_current_price, product_is_available) 
+                   VALUES %s RETURNING product_id;""", prod_records, fetch=True
+            )
+            for lookup_key, res_row in zip(prod_lookup, inserted_prod_ids):
+                product_id_map[lookup_key] = res_row[0]
+
+            # Generate Transactions ONLY for this chunk
+            chunk_orders = []
+            chunk_items = []
+            chunk_payments = []
+            
+            for shop in shops:
+                shop_products = products_by_shop[shop.shop_id]
+                active_staff_count = len([e for e in employees_by_shop[shop.shop_id] if e.employee_current_status == 'active'])
+                days_open = (date.today() - shop.shop_opened_at).days
+                order_rate = random.uniform(0.1, 0.4)
+                num_orders = max(5, int(days_open * order_rate))
+                
+                for _ in range(num_orders):
+                    transaction = generate_single_transaction(order_id_counter, shop, shop_products, active_staff_count)
+                    if transaction:
+                        order, items, payment = transaction
+                        chunk_orders.append(order)
+                        chunk_items.extend(items)
+                        chunk_payments.append(payment)
+                        order_id_counter += 1
+
+            # --- INSERT ORDERS FOR THIS CHUNK ---
+            order_id_map = {}
+            order_records = []
+            order_lookup = []
+            shop_to_employees_cache = {}
+            for (s_id, _), emp_id in employee_id_map.items():
+                shop_to_employees_cache.setdefault(s_id, []).append(emp_id)
+
+            for order in chunk_orders:
+                db_shop_id = shop_id_map[order.shop_id]
+                shop_emp_pool = shop_to_employees_cache.get(order.shop_id)
+                assigned_emp_id = random.choice(shop_emp_pool) if shop_emp_pool else None
+                order_records.append((
+                    db_shop_id, assigned_emp_id, order.ordered_at, order.order_status,
+                    order.order_subtotal, order.order_tax, order.order_total
+                ))
+                order_lookup.append(order.order_id)
+                
+            inserted_order_ids = execute_values(
+                cursor,
+                """INSERT INTO Orders (shop_id, employee_id, ordered_at, order_status, order_subtotal, order_tax, order_total) 
+                   VALUES %s RETURNING order_id;""", order_records, fetch=True
+            )
+            for old_id, res_row in zip(order_lookup, inserted_order_ids):
+                order_id_map[old_id] = res_row[0]
+
+            # --- INSERT ORDER ITEMS FOR THIS CHUNK ---
+            item_records = []
+            for item in chunk_items:
+                item_records.append((
+                    shop_id_map[item.shop_id], order_id_map[item.order_id], product_id_map[(item.shop_id, item.product_id)], item.quantity, item.unit_price
+                ))
+            execute_values(cursor, "INSERT INTO OrderItem (shop_id, order_id, product_id, quantity, unit_price) VALUES %s;", item_records)
+
+            # --- INSERT PAYMENTS FOR THIS CHUNK ---
+            pay_records = []
+            for pay in chunk_payments:
+                pay_records.append((
+                    shop_id_map[pay.shop_id], order_id_map[pay.order_id], pay.paid_at, pay.payment_method, pay.payment_status, pay.amount
+                ))
+            execute_values(cursor, "INSERT INTO Payment (shop_id, order_id, paid_at, payment_method, payment_status, payment_amount) VALUES %s;", pay_records)
+
+            # Intermediate periodic commit to secure data to disk and free DB transaction memory
+            conn.commit()
+            total_processed += len(shops)
+            print(f"   -> Progress: Completed {total_processed}/{num_shops} shops cleanly.")
+
+        print(f"\n🎉 Grand Success! All {num_shops} shops (and millions of dependent rows) fully written to database!")
+
+    except Exception as error:
+        print("\n❌ Error during execution chunk loop:", error)
+        if conn: conn.rollback()
     finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
+        if cursor: cursor.close()
+        if conn: conn.close()
