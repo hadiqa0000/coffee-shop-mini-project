@@ -22,7 +22,10 @@ print(dfemployees.isnull().sum()[df_employees.isnull().sum() > 0])
 print(dfshops.isnull().sum()[dfshops.isnull().sum() > 0])
 print(dfproducts.isnull().sum()[dfproducts.isnull().sum() > 0])
 print(dforders.isnull().sum()[dforders.isnull().sum() > 0])
+
 print(dforderitem.isnull().sum()[dforderitem.isnull().sum() > 0])
 print(dfpayment.isnull().sum()[dfpayment.isnull().sum() > 0])
 
+dforders['year'] = dforders['ordered_at'].dt.year
+yearly_revenue = dforders.groupby('year')['order_total'].sum().reset_index()
 
