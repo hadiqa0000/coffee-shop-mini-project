@@ -18,4 +18,11 @@ dfpayment = pd.read_sql_query("SELECT * FROM Payment", engine)
 dforders['ordered_at']= pd.to_datetime(dforders['ordered_at']
 dfemployee['employee_dob']= pd.to_datetime(dforders['employee_dob']
 dfemployee['employee_hire_date']= pd.to_datetime(dforders['employee_hire_date']
-print(df_employees.isnull().sum()[df_employees.isnull().sum() > 0])
+print(dfemployees.isnull().sum()[df_employees.isnull().sum() > 0])
+print(dfshops.isnull().sum()[dfshops.isnull().sum() > 0])
+print(dfproducts.isnull().sum()[dfproducts.isnull().sum() > 0])
+print(dforders.isnull().sum()[dforders.isnull().sum() > 0])
+print(dforderitem.isnull().sum()[dforderitem.isnull().sum() > 0])
+print(dfpayment.isnull().sum()[dfpayment.isnull().sum() > 0])
+
+
