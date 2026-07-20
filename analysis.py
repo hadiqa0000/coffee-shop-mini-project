@@ -28,4 +28,6 @@ print(dfpayment.isnull().sum()[dfpayment.isnull().sum() > 0])
 
 dforders['year'] = dforders['ordered_at'].dt.year
 yearly_revenue = dforders.groupby('year')['order_total'].sum().reset_index()
+print("\nYearly Revenue Trajectory :")
+print(yearly_revenue.to_string(index=False))
 
