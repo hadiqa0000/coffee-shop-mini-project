@@ -6,9 +6,10 @@ import random
 from faker import Faker
 from typing import Optional, List, Dict, Tuple
 import psycopg2
-from psycopg2.extras import execute_values  # <-- Added for high-speed bulk inserts
+from psycopg2.extras import execute_values
 import json
 import re
+import numpy as np  # Added for Poisson distribution
 
 fake = Faker('tr_TR')
 existing_address_strings = set()
@@ -35,6 +36,197 @@ INFLATION_DATA = {
     2025: 8.136,
     2026: 10.658
 }
+
+# ============ NEW: Random Walk & Markov Process Classes ============
+
+class RandomWalkGenerator:
+    """Geometric Brownian Motion with mean reversion"""
+    
+    def __init__(self, initial_value: float, volatility: float = 0.15, 
+                 drift: float = 0.0005, mean_reversion: float = 0.05,
+                 long_term_mean: Optional[float] = None):
+        """
+        Args:
+            initial_value: Starting value (e.g., daily orders)
+            volatility: σ - daily volatility (0.15 = 15%)
+            drift: μ - daily growth trend (0.0005 = 0.05% per day)
+            mean_reversion: θ - strength of pull toward long-term mean (0.05 = 5%)
+            long_term_mean: Target mean for reversion (if None, uses initial_value)
+        """
+        self.current_value = initial_value
+        self.volatility = volatility
+        self.drift = drift
+        self.mean_reversion = mean_reversion
+        self.long_term_mean = long_term_mean if long_term_mean is not None else initial_value
+        self.history = [initial_value]
+    
+    def step(self) -> float:
+        """Generate next value using mean-reverting geometric Brownian motion"""
+        # Random shock from normal distribution
+        epsilon = random.gauss(0, 1)
+        
+        # Calculate mean reversion component
+        deviation_ratio = (self.long_term_mean - self.current_value) / self.long_term_mean
+        reversion_component = self.mean_reversion * deviation_ratio
+        
+        # Combined change: drift + reversion + random shock
+        total_change = self.drift + reversion_component + self.volatility * epsilon
+        
+        # Apply change multiplicatively (geometric Brownian motion)
+        self.current_value *= (1 + total_change)
+        
+        # Ensure value stays positive
+        self.current_value = max(self.current_value, 0.5)
+        
+        self.history.append(self.current_value)
+        return self.current_value
+
+class MarkovChain:
+    """Markov chain for shop operational states"""
+    
+    STATES = ['booming', 'normal', 'slow', 'struggling']
+    
+    # Transition matrix: P(next_state | current_state)
+    TRANSITION_MATRIX = {
+        'booming': {'booming': 0.30, 'normal': 0.50, 'slow': 0.15, 'struggling': 0.05},
+        'normal': {'booming': 0.20, 'normal': 0.50, 'slow': 0.25, 'struggling': 0.05},
+        'slow': {'booming': 0.10, 'normal': 0.40, 'slow': 0.40, 'struggling': 0.10},
+        'struggling': {'booming': 0.05, 'normal': 0.25, 'slow': 0.40, 'struggling': 0.30}
+    }
+    
+    # State multipliers for order volume
+    STATE_MODIFIERS = {
+        'booming': 1.5,      # 50% more orders
+        'normal': 1.0,       # baseline
+        'slow': 0.7,         # 30% fewer orders
+        'struggling': 0.4    # 60% fewer orders
+    }
+    
+    # State modifiers for average ticket size
+    TICKET_MODIFIERS = {
+        'booming': 1.15,     # 15% higher spend
+        'normal': 1.0,
+        'slow': 0.9,
+        'struggling': 0.8
+    }
+    
+    def __init__(self, initial_state: str = 'normal'):
+        if initial_state not in self.STATES:
+            initial_state = 'normal'
+        self.current_state = initial_state
+        self.state_history = [initial_state]
+        self.days_in_state = 0
+    
+    def step(self) -> str:
+        """Transition to next state based on Markov process"""
+        transitions = self.TRANSITION_MATRIX[self.current_state]
+        next_state = random.choices(
+            list(transitions.keys()),
+            weights=list(transitions.values()),
+            k=1
+        )[0]
+        
+        # Update state
+        if next_state == self.current_state:
+            self.days_in_state += 1
+        else:
+            self.days_in_state = 0
+            self.current_state = next_state
+            
+        self.state_history.append(self.current_state)
+        return self.current_state
+    
+    def get_order_multiplier(self) -> float:
+        """Get multiplier for expected orders based on current state"""
+        return self.STATE_MODIFIERS[self.current_state]
+    
+    def get_ticket_multiplier(self) -> float:
+        """Get multiplier for average ticket based on current state"""
+        return self.TICKET_MODIFIERS[self.current_state]
+    
+    def get_state_duration(self) -> int:
+        """Get number of consecutive days in current state"""
+        return self.days_in_state
+
+class ShopStateTracker:
+    """Tracks all time-series state for a shop"""
+    
+    def __init__(self, shop_id: int, base_daily_orders: float = 30.0):
+        self.shop_id = shop_id
+        self.base_daily_orders = base_daily_orders
+        self.current_avg_ticket = random.gauss(120, 30)  # Average order value ~120 TL
+        
+        # Initialize random walk for orders
+        self.order_walk = RandomWalkGenerator(
+            initial_value=base_daily_orders,
+            volatility=random.uniform(0.10, 0.20),  # 10-20% daily volatility
+            drift=random.uniform(-0.0002, 0.001),   # Slight positive or negative trend
+            mean_reversion=0.05,
+            long_term_mean=base_daily_orders
+        )
+        
+        # Initialize random walk for average ticket
+        self.ticket_walk = RandomWalkGenerator(
+            initial_value=self.current_avg_ticket,
+            volatility=0.08,      # 8% volatility
+            drift=0.0003,         # 0.03% daily increase (inflation/price increases)
+            mean_reversion=0.03,
+            long_term_mean=self.current_avg_ticket
+        )
+        
+        # Initialize Markov chain
+        self.markov = MarkovChain(
+            initial_state=random.choices(['booming', 'normal', 'slow'], 
+                                        weights=[0.15, 0.65, 0.20])[0]
+        )
+        
+        # Historical tracking
+        self.daily_orders = []
+        self.daily_revenue = []
+        self.day_counter = 0
+    
+    def advance_day(self) -> Tuple[float, float, float]:
+        """Advance one day and return (expected_orders, avg_ticket, state_multiplier)"""
+        # 1. Update Markov state (weekly state changes)
+        if self.day_counter % random.randint(5, 10) == 0:
+            self.markov.step()
+        
+        # 2. Update random walks
+        baseline_orders = self.order_walk.step()
+        self.current_avg_ticket = self.ticket_walk.step()
+        
+        # 3. Apply Markov state multiplier
+        state_multiplier = self.markov.get_order_multiplier()
+        expected_orders = baseline_orders * state_multiplier
+        
+        # 4. Apply day-of-week effects
+        day_of_week = (self.day_counter % 7)
+        dow_multiplier = [1.0, 0.95, 0.95, 0.95, 1.1, 1.3, 1.2][day_of_week]
+        expected_orders *= dow_multiplier
+        
+        # 5. Apply seasonality (month effects)
+        month = (self.day_counter // 30) % 12
+        season_multiplier = [0.8, 0.85, 0.9, 1.0, 1.1, 1.15, 
+                           1.1, 1.0, 1.05, 1.0, 0.9, 0.85][month]
+        expected_orders *= season_multiplier
+        
+        # 6. Generate actual orders using Poisson distribution
+        # Use numpy for Poisson, or implement manually if numpy not available
+        try:
+            actual_orders = np.random.poisson(max(1, int(expected_orders)))
+        except:
+            # Fallback if numpy not available
+            lam = max(1, int(expected_orders))
+            actual_orders = random.choices(range(lam*2), 
+                                          weights=[(lam**k * np.exp(-lam)) / np.math.factorial(k) 
+                                                  for k in range(lam*2)])[0]
+        
+        self.daily_orders.append(actual_orders)
+        self.day_counter += 1
+        
+        return actual_orders, self.current_avg_ticket, state_multiplier
+
+# ============ END OF NEW CLASSES ============
 
 @dataclass
 class Address:
@@ -118,7 +310,6 @@ def generate_unique_address() -> Address:
         district = random.choice(TURKIYE_GEOGRAPHY[city])
         building_no = str(random.randint(1, 120))
         street_no = str(random.randint(1, 180))
-        
         
         addr = Address(building_no=building_no, street_no=street_no, district=district, city=city)
         address_string = addr.to_string()
@@ -396,40 +587,146 @@ def generate_shop_staff(shop: CoffeeShop) -> List[Employee]:
             
     return all_employees
 
-def generate_single_transaction(
-    order_id: int, 
-    shop: CoffeeShop, 
+# ============ MODIFIED: Transaction generation with time-series state ============
+
+def generate_order_time(markov_state: str, day_counter: int) -> time:
+    """Generate realistic order time based on Markov state"""
+    # Peak hours (9-10 AM, 2-4 PM)
+    peak_hours = [9, 10, 14, 15, 16]
+    
+    if markov_state == 'booming':
+        # More orders during peak hours
+        hour = random.choices(
+            list(range(8, 21)),
+            weights=[1,3,5,4,3,2,4,6,5,3,2,1,1],  # Peaks at 10 and 15
+            k=1
+        )[0]
+    elif markov_state == 'struggling':
+        # Flatter distribution, fewer peak concentration
+        hour = random.randint(8, 20)
+    else:
+        # Normal distribution around 2 PM
+        hour = int(random.gauss(14, 2.5))
+        hour = max(8, min(20, hour))
+    
+    minute = random.randint(0, 59)
+    return time(hour, minute)
+
+def generate_transactions_for_shop(
+    order_id_counter: int,
+    shop: CoffeeShop,
     shop_products: List[Product],
-    total_employees: int
-) -> Optional[Tuple[Orders, List[OrderItem], Payment]]:
-    if not shop_products:
-        return None 
-        
-    today = date.today()
-    days_open = (today - shop.shop_opened_at).days
+    shop_state: ShopStateTracker,
+    total_employees: int,
+    max_days: Optional[int] = None
+) -> Tuple[List[Orders], List[OrderItem], List[Payment], int]:
+    """
+    Generate transactions using random walk and Markov processes
+    Returns: (orders, order_items, payments, new_order_id_counter)
+    """
+    all_orders = []
+    all_items = []
+    all_payments = []
+    
+    # Determine number of days to generate
+    if max_days is None:
+        days_open = (date.today() - shop.shop_opened_at).days
+    else:
+        days_open = max_days
     
     if days_open <= 0:
-        ordered_at = datetime.combine(shop.shop_opened_at, datetime.min.time())
-    else:
-        random_days = random.randint(0, days_open)
-        ordered_date = shop.shop_opened_at + timedelta(days=random_days)
-        random_time = time(random.randint(7, 22), random.randint(0, 59))
-        ordered_at = datetime.combine(ordered_date, random_time)
+        days_open = 30  # Minimum 30 days if just opened
+    
+    # Generate day by day with time-series continuity
+    for day in range(days_open):
+        current_date = shop.shop_opened_at + timedelta(days=day)
         
+        # Skip future dates
+        if current_date > date.today():
+            break
+        
+        # Advance the shop state for this day
+        actual_orders, avg_ticket, state_multiplier = shop_state.advance_day()
+        
+        # Generate each order for this day
+        for order_num in range(actual_orders):
+            # Generate realistic order time
+            order_hour = generate_order_time(shop_state.markov.current_state, day)
+            order_time = datetime.combine(current_date, order_hour)
+            
+            # Generate the transaction
+            transaction = generate_single_transaction_with_state(
+                order_id_counter,
+                shop,
+                shop_products,
+                total_employees,
+                shop_state,
+                order_time,
+                avg_ticket
+            )
+            
+            if transaction:
+                order, items, payment = transaction
+                all_orders.append(order)
+                all_items.extend(items)
+                all_payments.append(payment)
+                order_id_counter += 1
+    
+    return all_orders, all_items, all_payments, order_id_counter
+
+def generate_single_transaction_with_state(
+    order_id: int,
+    shop: CoffeeShop,
+    shop_products: List[Product],
+    total_employees: int,
+    shop_state: ShopStateTracker,
+    ordered_at: datetime,
+    avg_ticket: float
+) -> Optional[Tuple[Orders, List[OrderItem], Payment]]:
+    """Generate a single transaction using shop state"""
+    
+    if not shop_products:
+        return None
+    
+    # Get available products
     available_products = [p for p in shop_products if p.product_is_available]
     if not available_products:
-        available_products = shop_products 
-        
-    max_cart_variety = min(len(available_products), 4)
-    cart_variety_size = random.choices([1, 2, 3, 4], weights=[0.50, 0.35, 0.12, 0.03], k=1)[0]
-    cart_variety_size = min(cart_variety_size, max_cart_variety)
+        available_products = shop_products
     
-    purchased_products = random.sample(available_products, k=cart_variety_size)
+    # Determine cart size based on average ticket
+    # Average item price is around 70 TL
+    avg_item_price = 70.0
+    expected_items = max(1, int(avg_ticket / avg_item_price))
+    
+    # Add randomness to cart size (Poisson-like)
+    cart_variety_size = min(
+        random.choices(
+            [1, 2, 3, 4, 5, 6],
+            weights=[0.15, 0.25, 0.25, 0.20, 0.10, 0.05],
+            k=1
+        )[0],
+        len(available_products)
+    )
+    
+    # Apply Markov state modifier to ticket size
+    ticket_multiplier = shop_state.markov.get_ticket_multiplier()
+    effective_cart_size = max(1, min(
+        int(cart_variety_size * ticket_multiplier),
+        len(available_products)
+    ))
+    
+    # Select products
+    purchased_products = random.sample(available_products, k=effective_cart_size)
+    
     order_items = []
     subtotal = 0.0
     
     for prod in purchased_products:
-        quantity = random.choices([1, 2, 3], weights=[0.85, 0.12, 0.03], k=1)[0]
+        # Quantity distribution influenced by state
+        if shop_state.markov.current_state == 'booming':
+            quantity = random.choices([1, 2, 3, 4], weights=[0.6, 0.25, 0.10, 0.05], k=1)[0]
+        else:
+            quantity = random.choices([1, 2, 3], weights=[0.85, 0.12, 0.03], k=1)[0]
         
         base_uninflated_price = PRODUCT_BASELINE[prod.product_category][prod.product_name]
         unit_price = calculate_historical_price(base_uninflated_price, shop, total_employees, ordered_at.year)
@@ -444,12 +741,18 @@ def generate_single_transaction(
             line_total=line_total
         ))
         subtotal += line_total
-        
+    
     subtotal = round(subtotal, 2)
     tax = round(subtotal * 0.10, 2)
     total = round(subtotal + tax, 2)
     
-    order_status = random.choices(['pending', 'served', 'cancelled'], weights=[0.70, 0.25, 0.05], k=1)[0]
+    # Order status influenced by state
+    if shop_state.markov.current_state == 'booming':
+        order_status = random.choices(['pending', 'served', 'cancelled'], weights=[0.65, 0.30, 0.05], k=1)[0]
+    elif shop_state.markov.current_state == 'struggling':
+        order_status = random.choices(['pending', 'served', 'cancelled'], weights=[0.70, 0.20, 0.10], k=1)[0]
+    else:
+        order_status = random.choices(['pending', 'served', 'cancelled'], weights=[0.70, 0.25, 0.05], k=1)[0]
     
     order = Orders(
         order_id=order_id, shop_id=shop.shop_id, ordered_at=ordered_at,
@@ -457,14 +760,18 @@ def generate_single_transaction(
     )
     
     pay_method = random.choice(PAYMENT_METHOD)
-    pay_status = 'completed' if order_status == 'completed' else ('cancelled' if order_status == 'cancelled' else random.choice(['completed', 'cancelled']))
-
+    pay_status = 'completed' if order_status == 'completed' else (
+        'cancelled' if order_status == 'cancelled' else random.choice(['completed', 'cancelled'])
+    )
+    
     payment = Payment(
         shop_id=shop.shop_id, order_id=order_id, paid_at=ordered_at,
         payment_method=pay_method, payment_status=pay_status, amount=total
     )
     
     return order, order_items, payment
+
+# ============ END OF MODIFIED FUNCTIONS ============
 
 if __name__ == "__main__":
     user_input = input("Enter the number of NEW coffee shops you want to generate: ").strip()
@@ -485,7 +792,6 @@ if __name__ == "__main__":
         cursor = conn.cursor()
         print("\nChecking database for existing records to prevent duplicates...")
 
-        # 1. Track existing unique attributes globally
         cursor.execute("SELECT shop_name FROM CoffeeShop;")
         for row in cursor.fetchall():
             generated_shop_names.add(row[0])
@@ -498,7 +804,6 @@ if __name__ == "__main__":
         for row in cursor.fetchall():
             existing_address_strings.add(row[0])
 
-        # 2. Sync starting IDs
         cursor.execute("SELECT COALESCE(MAX(shop_id), 0) FROM CoffeeShop;")
         start_shop_id = cursor.fetchone()[0] + 1
         
@@ -515,21 +820,20 @@ if __name__ == "__main__":
         if conn: conn.close()
         exit(1)
 
-    # --- CHUNKED EXECUTION CORE ---
-    CHUNK_SIZE = 50  # Keeps RAM incredibly low by clearing memory after every 50 shops
+    CHUNK_SIZE = 50
     total_processed = 0
     
-    print(f"\n🚀 Streaming data generation in chunks of {CHUNK_SIZE} shops...")
+    print(f"\n🚀 Streaming data generation in chunks of {CHUNK_SIZE} shops with Random Walk & Markov processes...")
     
     try:
         for chunk_start in range(start_shop_id, start_shop_id + num_shops, CHUNK_SIZE):
             chunk_end = min(chunk_start + CHUNK_SIZE, start_shop_id + num_shops)
             print(f"Processing shops {chunk_start} to {chunk_end - 1}...")
             
-            # Generate ONLY this chunk's shops in memory
+            # Generate shops
             shops = [generate_coffee_shop(i) for i in range(chunk_start, chunk_end)]
             
-            # --- INSERT COFFEE SHOPS FOR THIS CHUNK ---
+            # Insert shops
             shop_id_map = {}
             for s in shops:
                 hours_json = json.dumps([{"open": h[0].strftime('%H:%M'), "close": h[1].strftime('%H:%M')} for h in s.operating_hours])
@@ -539,7 +843,7 @@ if __name__ == "__main__":
                 """, (s.shop_name, s.shop_address.to_string(), s.shop_phone, s.shop_opened_at, hours_json, s.shop_markup_multiplier))
                 shop_id_map[s.shop_id] = cursor.fetchone()[0]
 
-            # Generate child objects ONLY for this chunk
+            # Generate employees and products
             chunk_employees = []
             employees_by_shop = {}
             products_by_shop = {}
@@ -552,7 +856,7 @@ if __name__ == "__main__":
                 active_employees = [e for e in employees if e.employee_current_status == 'active']
                 products_by_shop[shop.shop_id] = generate_shop_products(shop, len(active_employees))
 
-            # --- INSERT EMPLOYEES FOR THIS CHUNK ---
+            # Insert employees
             employee_id_map = {}
             emp_records = []
             emp_lookup = []
@@ -573,7 +877,7 @@ if __name__ == "__main__":
             for lookup_key, res_row in zip(emp_lookup, inserted_emp_ids):
                 employee_id_map[lookup_key] = res_row[0]
 
-            # --- INSERT PRODUCTS FOR THIS CHUNK ---
+            # Insert products
             product_id_map = {}
             prod_records = []
             prod_lookup = []
@@ -593,7 +897,7 @@ if __name__ == "__main__":
             for lookup_key, res_row in zip(prod_lookup, inserted_prod_ids):
                 product_id_map[lookup_key] = res_row[0]
 
-            # Generate Transactions ONLY for this chunk
+            # ============ MODIFIED: Generate transactions with time-series state ============
             chunk_orders = []
             chunk_items = []
             chunk_payments = []
@@ -601,20 +905,31 @@ if __name__ == "__main__":
             for shop in shops:
                 shop_products = products_by_shop[shop.shop_id]
                 active_staff_count = len([e for e in employees_by_shop[shop.shop_id] if e.employee_current_status == 'active'])
-                days_open = (date.today() - shop.shop_opened_at).days
-                order_rate = random.uniform(0.1, 0.4)
-                num_orders = max(5, int(days_open * order_rate))
                 
-                for _ in range(num_orders):
-                    transaction = generate_single_transaction(order_id_counter, shop, shop_products, active_staff_count)
-                    if transaction:
-                        order, items, payment = transaction
-                        chunk_orders.append(order)
-                        chunk_items.extend(items)
-                        chunk_payments.append(payment)
-                        order_id_counter += 1
+                # Initialize shop state with random walk and Markov
+                base_orders = random.uniform(10, 50)  # Base daily orders
+                shop_state = ShopStateTracker(shop.shop_id, base_orders)
+                
+                # Generate transactions using random walk and Markov
+                orders, items, payments, order_id_counter = generate_transactions_for_shop(
+                    order_id_counter,
+                    shop,
+                    shop_products,
+                    shop_state,
+                    active_staff_count,
+                    max_days=None  # Generate from shop opening to today
+                )
+                
+                chunk_orders.extend(orders)
+                chunk_items.extend(items)
+                chunk_payments.extend(payments)
+                
+                # Optional: Print summary for this shop
+                if len(orders) > 0:
+                    print(f"   Shop {shop.shop_id} ({shop.shop_name}): {len(orders)} orders over {shop_state.day_counter} days, "
+                          f"avg {len(orders)/max(1, shop_state.day_counter):.1f}/day")
 
-            # --- INSERT ORDERS FOR THIS CHUNK ---
+            # Insert orders
             order_id_map = {}
             order_records = []
             order_lookup = []
@@ -640,28 +955,29 @@ if __name__ == "__main__":
             for old_id, res_row in zip(order_lookup, inserted_order_ids):
                 order_id_map[old_id] = res_row[0]
 
-            # --- INSERT ORDER ITEMS FOR THIS CHUNK ---
+            # Insert order items
             item_records = []
             for item in chunk_items:
                 item_records.append((
-                    shop_id_map[item.shop_id], order_id_map[item.order_id], product_id_map[(item.shop_id, item.product_id)], item.quantity, item.unit_price
+                    shop_id_map[item.shop_id], order_id_map[item.order_id], 
+                    product_id_map[(item.shop_id, item.product_id)], item.quantity, item.unit_price
                 ))
             execute_values(cursor, "INSERT INTO OrderItem (shop_id, order_id, product_id, quantity, unit_price) VALUES %s;", item_records)
 
-            # --- INSERT PAYMENTS FOR THIS CHUNK ---
+            # Insert payments
             pay_records = []
             for pay in chunk_payments:
                 pay_records.append((
-                    shop_id_map[pay.shop_id], order_id_map[pay.order_id], pay.paid_at, pay.payment_method, pay.payment_status, pay.amount
+                    shop_id_map[pay.shop_id], order_id_map[pay.order_id], 
+                    pay.paid_at, pay.payment_method, pay.payment_status, pay.amount
                 ))
             execute_values(cursor, "INSERT INTO Payment (shop_id, order_id, paid_at, payment_method, payment_status, payment_amount) VALUES %s;", pay_records)
 
-            # Intermediate periodic commit to secure data to disk and free DB transaction memory
             conn.commit()
             total_processed += len(shops)
             print(f"   -> Progress: Completed {total_processed}/{num_shops} shops cleanly.")
 
-        print(f"\n🎉 Grand Success! All {num_shops} shops (and millions of dependent rows) fully written to database!")
+        print(f"\n🎉 Grand Success! All {num_shops} shops with time-series data written to database!")
 
     except Exception as error:
         print("\n❌ Error during execution chunk loop:", error)
