@@ -9,7 +9,8 @@ import psycopg2
 from psycopg2.extras import execute_values
 import json
 import re
-import numpy as np  # Added for Poisson distribution
+import numpy as np
+import math
 
 fake = Faker('tr_TR')
 existing_address_strings = set()
@@ -37,7 +38,157 @@ INFLATION_DATA = {
     2026: 10.658
 }
 
-# ============ NEW: Random Walk & Markov Process Classes ============
+# ============ POISSON PROCESS CLASSES ============
+
+class TimeOfDayIntensity:
+    """Models customer arrival intensity throughout the day"""
+    
+    def __init__(self, opening_hour: int = 8, closing_hour: int = 22):
+        self.opening_hour = opening_hour
+        self.closing_hour = closing_hour
+        
+        # Define intensity profile for different times of day
+        # These are multipliers that increase/decrease arrival rates
+        self.hourly_intensity = {
+            # Morning rush: 8-10 AM
+            8: 0.6, 9: 1.8, 10: 1.5,
+            # Late morning: 11-12
+            11: 1.0, 12: 0.9,
+            # Lunch rush: 1-2 PM
+            13: 1.4, 14: 1.6,
+            # Afternoon: 3-5 PM
+            15: 1.1, 16: 1.0, 17: 0.9,
+            # Evening rush: 6-8 PM
+            18: 1.3, 19: 1.5, 20: 1.2,
+            # Late evening: 9-10 PM
+            21: 0.7, 22: 0.4
+        }
+        
+        # Smooth the intensity curve using interpolation
+        self.intensity_cache = {}
+        self._build_intensity_cache()
+    
+    def _build_intensity_cache(self):
+        """Build minute-by-minute intensity cache for smooth transitions"""
+        for minute in range(0, 24 * 60):
+            hour = minute // 60
+            minute_of_hour = minute % 60
+            
+            # Get surrounding hours
+            h1 = hour
+            h2 = (hour + 1) % 24
+            
+            # Get intensities for surrounding hours (default to 0.5 if not defined)
+            i1 = self.hourly_intensity.get(h1, 0.5)
+            i2 = self.hourly_intensity.get(h2, 0.5)
+            
+            # Linear interpolation between hours
+            fraction = minute_of_hour / 60.0
+            intensity = i1 * (1 - fraction) + i2 * fraction
+            
+            # Apply opening/closing boundaries
+            if hour < self.opening_hour or hour > self.closing_hour:
+                intensity = 0.0
+            elif hour == self.opening_hour and minute_of_hour < 30:
+                # Gradual opening
+                intensity = intensity * (minute_of_hour / 30.0)
+            elif hour == self.closing_hour and minute_of_hour > 30:
+                # Gradual closing
+                intensity = intensity * (1 - (minute_of_hour - 30) / 30.0)
+                if minute_of_hour > 45:
+                    intensity = 0.0
+            
+            self.intensity_cache[minute] = max(0, intensity)
+    
+    def get_intensity(self, minute_of_day: int) -> float:
+        """Get arrival intensity at a specific minute of day (0-1439)"""
+        return self.intensity_cache.get(minute_of_day, 0.0)
+    
+    def get_average_intensity(self, base_rate: float = 1.0) -> float:
+        """Calculate average intensity across the day"""
+        total = sum(self.intensity_cache.values())
+        return (total / (24 * 60)) * base_rate
+
+class PoissonArrivalProcess:
+    """
+    Non-homogeneous Poisson process for customer arrivals
+    λ(t) = base_rate * intensity_profile(t) * state_multiplier
+    """
+    
+    def __init__(self, base_rate: float, intensity_profile: TimeOfDayIntensity):
+        """
+        Args:
+            base_rate: Base arrivals per minute (e.g., 0.5 = 1 customer every 2 minutes)
+            intensity_profile: TimeOfDayIntensity object
+        """
+        self.base_rate = base_rate
+        self.intensity_profile = intensity_profile
+        self.state_multiplier = 1.0  # Modified by Markov chain state
+        self.arrival_history = []
+        
+    def set_state_multiplier(self, multiplier: float):
+        """Update arrival rate based on Markov state"""
+        self.state_multiplier = multiplier
+    
+    def get_rate_at(self, minute_of_day: int) -> float:
+        """Get arrival rate at specific minute (arrivals per minute)"""
+        base_intensity = self.intensity_profile.get_intensity(minute_of_day)
+        return self.base_rate * base_intensity * self.state_multiplier
+    
+    def generate_arrival_times(self, start_time: time, end_time: time, 
+                               max_arrivals: int = 1000) -> List[datetime]:
+        """
+        Generate arrival times using inverse transform sampling
+        Returns list of datetime objects for each arrival
+        """
+        start_minutes = start_time.hour * 60 + start_time.minute
+        end_minutes = end_time.hour * 60 + end_time.minute
+        
+        arrivals = []
+        current_time = start_minutes
+        current_date = None
+        
+        # Use thinning method for non-homogeneous Poisson
+        max_rate = max([self.get_rate_at(m) for m in range(start_minutes, end_minutes)]) * 1.2
+        
+        while len(arrivals) < max_arrivals:
+            # Generate exponential inter-arrival time
+            if max_rate > 0:
+                u = random.random()
+                inter_arrival = -math.log(u) / max_rate if u > 0 else 0
+            else:
+                break
+            
+            # Advance time
+            current_time += inter_arrival * 60  # Convert minutes to seconds
+            current_time = min(current_time, end_minutes)
+            
+            # Accept or reject based on thinning
+            if current_time >= end_minutes:
+                break
+                
+            current_minute = int(current_time)
+            current_rate = self.get_rate_at(current_minute)
+            
+            # Thinning acceptance probability
+            accept_prob = current_rate / max_rate if max_rate > 0 else 0
+            
+            if random.random() < accept_prob:
+                # Create datetime for this arrival
+                hours = current_minute // 60
+                mins = current_minute % 60
+                
+                # Randomize seconds within the minute
+                seconds = random.randint(0, 59)
+                arrival_dt = datetime.combine(
+                    date.today(), 
+                    time(hours, mins, seconds)
+                )
+                arrivals.append(arrival_dt)
+        
+        return arrivals
+
+# ============ RANDOM WALK & MARKOV CHAIN (from previous) ============
 
 class RandomWalkGenerator:
     """Geometric Brownian Motion with mean reversion"""
@@ -45,14 +196,6 @@ class RandomWalkGenerator:
     def __init__(self, initial_value: float, volatility: float = 0.15, 
                  drift: float = 0.0005, mean_reversion: float = 0.05,
                  long_term_mean: Optional[float] = None):
-        """
-        Args:
-            initial_value: Starting value (e.g., daily orders)
-            volatility: σ - daily volatility (0.15 = 15%)
-            drift: μ - daily growth trend (0.0005 = 0.05% per day)
-            mean_reversion: θ - strength of pull toward long-term mean (0.05 = 5%)
-            long_term_mean: Target mean for reversion (if None, uses initial_value)
-        """
         self.current_value = initial_value
         self.volatility = volatility
         self.drift = drift
@@ -61,23 +204,12 @@ class RandomWalkGenerator:
         self.history = [initial_value]
     
     def step(self) -> float:
-        """Generate next value using mean-reverting geometric Brownian motion"""
-        # Random shock from normal distribution
         epsilon = random.gauss(0, 1)
-        
-        # Calculate mean reversion component
         deviation_ratio = (self.long_term_mean - self.current_value) / self.long_term_mean
         reversion_component = self.mean_reversion * deviation_ratio
-        
-        # Combined change: drift + reversion + random shock
         total_change = self.drift + reversion_component + self.volatility * epsilon
-        
-        # Apply change multiplicatively (geometric Brownian motion)
         self.current_value *= (1 + total_change)
-        
-        # Ensure value stays positive
         self.current_value = max(self.current_value, 0.5)
-        
         self.history.append(self.current_value)
         return self.current_value
 
@@ -86,7 +218,6 @@ class MarkovChain:
     
     STATES = ['booming', 'normal', 'slow', 'struggling']
     
-    # Transition matrix: P(next_state | current_state)
     TRANSITION_MATRIX = {
         'booming': {'booming': 0.30, 'normal': 0.50, 'slow': 0.15, 'struggling': 0.05},
         'normal': {'booming': 0.20, 'normal': 0.50, 'slow': 0.25, 'struggling': 0.05},
@@ -94,17 +225,15 @@ class MarkovChain:
         'struggling': {'booming': 0.05, 'normal': 0.25, 'slow': 0.40, 'struggling': 0.30}
     }
     
-    # State multipliers for order volume
     STATE_MODIFIERS = {
-        'booming': 1.5,      # 50% more orders
-        'normal': 1.0,       # baseline
-        'slow': 0.7,         # 30% fewer orders
-        'struggling': 0.4    # 60% fewer orders
+        'booming': 1.5,
+        'normal': 1.0,
+        'slow': 0.7,
+        'struggling': 0.4
     }
     
-    # State modifiers for average ticket size
     TICKET_MODIFIERS = {
-        'booming': 1.15,     # 15% higher spend
+        'booming': 1.15,
         'normal': 1.0,
         'slow': 0.9,
         'struggling': 0.8
@@ -118,7 +247,6 @@ class MarkovChain:
         self.days_in_state = 0
     
     def step(self) -> str:
-        """Transition to next state based on Markov process"""
         transitions = self.TRANSITION_MATRIX[self.current_state]
         next_state = random.choices(
             list(transitions.keys()),
@@ -126,7 +254,6 @@ class MarkovChain:
             k=1
         )[0]
         
-        # Update state
         if next_state == self.current_state:
             self.days_in_state += 1
         else:
@@ -137,39 +264,52 @@ class MarkovChain:
         return self.current_state
     
     def get_order_multiplier(self) -> float:
-        """Get multiplier for expected orders based on current state"""
         return self.STATE_MODIFIERS[self.current_state]
     
     def get_ticket_multiplier(self) -> float:
-        """Get multiplier for average ticket based on current state"""
         return self.TICKET_MODIFIERS[self.current_state]
-    
-    def get_state_duration(self) -> int:
-        """Get number of consecutive days in current state"""
-        return self.days_in_state
 
 class ShopStateTracker:
     """Tracks all time-series state for a shop"""
     
-    def __init__(self, shop_id: int, base_daily_orders: float = 30.0):
+    def __init__(self, shop_id: int, opening_hour: int = 8, closing_hour: int = 22):
         self.shop_id = shop_id
-        self.base_daily_orders = base_daily_orders
-        self.current_avg_ticket = random.gauss(120, 30)  # Average order value ~120 TL
+        self.opening_hour = opening_hour
+        self.closing_hour = closing_hour
         
-        # Initialize random walk for orders
+        # Base arrival rate (customers per minute)
+        # Typical coffee shop: 0.3-1.0 customers per minute (18-60 per hour)
+        self.base_arrival_rate = random.uniform(0.3, 0.8)
+        
+        # Initialize intensity profile
+        self.intensity_profile = TimeOfDayIntensity(opening_hour, closing_hour)
+        
+        # Initialize Poisson arrival process
+        self.arrival_process = PoissonArrivalProcess(
+            base_rate=self.base_arrival_rate,
+            intensity_profile=self.intensity_profile
+        )
+        
+        # Initialize random walk for daily total orders
+        # Daily total = base_rate * minutes_open * average_intensity
+        avg_intensity = self.intensity_profile.get_average_intensity()
+        initial_daily_orders = int(self.base_arrival_rate * (closing_hour - opening_hour) * 60 * avg_intensity)
+        initial_daily_orders = max(10, initial_daily_orders)
+        
         self.order_walk = RandomWalkGenerator(
-            initial_value=base_daily_orders,
-            volatility=random.uniform(0.10, 0.20),  # 10-20% daily volatility
-            drift=random.uniform(-0.0002, 0.001),   # Slight positive or negative trend
+            initial_value=initial_daily_orders,
+            volatility=random.uniform(0.10, 0.20),
+            drift=random.uniform(-0.0002, 0.001),
             mean_reversion=0.05,
-            long_term_mean=base_daily_orders
+            long_term_mean=initial_daily_orders
         )
         
         # Initialize random walk for average ticket
+        self.current_avg_ticket = random.gauss(120, 30)
         self.ticket_walk = RandomWalkGenerator(
             initial_value=self.current_avg_ticket,
-            volatility=0.08,      # 8% volatility
-            drift=0.0003,         # 0.03% daily increase (inflation/price increases)
+            volatility=0.08,
+            drift=0.0003,
             mean_reversion=0.03,
             long_term_mean=self.current_avg_ticket
         )
@@ -184,49 +324,79 @@ class ShopStateTracker:
         self.daily_orders = []
         self.daily_revenue = []
         self.day_counter = 0
+        self.total_arrivals = []
     
-    def advance_day(self) -> Tuple[float, float, float]:
-        """Advance one day and return (expected_orders, avg_ticket, state_multiplier)"""
-        # 1. Update Markov state (weekly state changes)
+    def advance_day(self) -> Tuple[int, float, float]:
+        """Advance one day and return (actual_orders, avg_ticket, state_multiplier)"""
+        # Update Markov state
         if self.day_counter % random.randint(5, 10) == 0:
             self.markov.step()
         
-        # 2. Update random walks
-        baseline_orders = self.order_walk.step()
+        # Update random walks
+        expected_daily_orders = self.order_walk.step()
         self.current_avg_ticket = self.ticket_walk.step()
         
-        # 3. Apply Markov state multiplier
+        # Apply Markov state multiplier
         state_multiplier = self.markov.get_order_multiplier()
-        expected_orders = baseline_orders * state_multiplier
+        self.arrival_process.set_state_multiplier(state_multiplier)
         
-        # 4. Apply day-of-week effects
+        # Apply day-of-week effects
         day_of_week = (self.day_counter % 7)
         dow_multiplier = [1.0, 0.95, 0.95, 0.95, 1.1, 1.3, 1.2][day_of_week]
-        expected_orders *= dow_multiplier
+        expected_daily_orders *= dow_multiplier
         
-        # 5. Apply seasonality (month effects)
+        # Apply seasonality
         month = (self.day_counter // 30) % 12
         season_multiplier = [0.8, 0.85, 0.9, 1.0, 1.1, 1.15, 
                            1.1, 1.0, 1.05, 1.0, 0.9, 0.85][month]
-        expected_orders *= season_multiplier
+        expected_daily_orders *= season_multiplier
         
-        # 6. Generate actual orders using Poisson distribution
-        # Use numpy for Poisson, or implement manually if numpy not available
+        # Generate actual orders using Poisson
         try:
-            actual_orders = np.random.poisson(max(1, int(expected_orders)))
+            actual_orders = np.random.poisson(max(1, int(expected_daily_orders)))
         except:
-            # Fallback if numpy not available
-            lam = max(1, int(expected_orders))
+            # Fallback
+            lam = max(1, int(expected_daily_orders))
             actual_orders = random.choices(range(lam*2), 
-                                          weights=[(lam**k * np.exp(-lam)) / np.math.factorial(k) 
+                                          weights=[(lam**k * math.exp(-lam)) / math.factorial(k) 
                                                   for k in range(lam*2)])[0]
         
         self.daily_orders.append(actual_orders)
         self.day_counter += 1
         
         return actual_orders, self.current_avg_ticket, state_multiplier
+    
+    def generate_arrivals_for_day(self, current_date: date) -> List[datetime]:
+        """
+        Generate customer arrival times for a specific day using Poisson process
+        """
+        opening_time = time(self.opening_hour, 0)
+        closing_time = time(self.closing_hour, 0)
+        
+        # Adjust arrival rate based on current state
+        state_multiplier = self.markov.get_order_multiplier()
+        self.arrival_process.set_state_multiplier(state_multiplier)
+        
+        # Generate arrival times
+        arrivals = self.arrival_process.generate_arrival_times(
+            opening_time, closing_time, 
+            max_arrivals=500  # Cap to prevent infinite loops
+        )
+        
+        # Attach dates to arrivals
+        dated_arrivals = []
+        for arr in arrivals:
+            # Replace date with current_date
+            dated_arrival = datetime.combine(
+                current_date,
+                time(arr.hour, arr.minute, arr.second)
+            )
+            dated_arrivals.append(dated_arrival)
+        
+        self.total_arrivals.extend(dated_arrivals)
+        return dated_arrivals
 
-# ============ END OF NEW CLASSES ============
+# ============ END OF POISSON PROCESS CLASSES ============
 
 @dataclass
 class Address:
@@ -587,143 +757,57 @@ def generate_shop_staff(shop: CoffeeShop) -> List[Employee]:
             
     return all_employees
 
-# ============ MODIFIED: Transaction generation with time-series state ============
+# ============ MODIFIED: Transaction generation with Poisson arrivals ============
 
-def generate_order_time(markov_state: str, day_counter: int) -> time:
-    """Generate realistic order time based on Markov state"""
-    # Peak hours (9-10 AM, 2-4 PM)
-    peak_hours = [9, 10, 14, 15, 16]
-    
-    if markov_state == 'booming':
-        # More orders during peak hours
-        hour = random.choices(
-            list(range(8, 21)),
-            weights=[1,3,5,4,3,2,4,6,5,3,2,1,1],  # Peaks at 10 and 15
-            k=1
-        )[0]
-    elif markov_state == 'struggling':
-        # Flatter distribution, fewer peak concentration
-        hour = random.randint(8, 20)
-    else:
-        # Normal distribution around 2 PM
-        hour = int(random.gauss(14, 2.5))
-        hour = max(8, min(20, hour))
-    
-    minute = random.randint(0, 59)
-    return time(hour, minute)
-
-def generate_transactions_for_shop(
-    order_id_counter: int,
-    shop: CoffeeShop,
-    shop_products: List[Product],
-    shop_state: ShopStateTracker,
-    total_employees: int,
-    max_days: Optional[int] = None
-) -> Tuple[List[Orders], List[OrderItem], List[Payment], int]:
-    """
-    Generate transactions using random walk and Markov processes
-    Returns: (orders, order_items, payments, new_order_id_counter)
-    """
-    all_orders = []
-    all_items = []
-    all_payments = []
-    
-    # Determine number of days to generate
-    if max_days is None:
-        days_open = (date.today() - shop.shop_opened_at).days
-    else:
-        days_open = max_days
-    
-    if days_open <= 0:
-        days_open = 30  # Minimum 30 days if just opened
-    
-    # Generate day by day with time-series continuity
-    for day in range(days_open):
-        current_date = shop.shop_opened_at + timedelta(days=day)
-        
-        # Skip future dates
-        if current_date > date.today():
-            break
-        
-        # Advance the shop state for this day
-        actual_orders, avg_ticket, state_multiplier = shop_state.advance_day()
-        
-        # Generate each order for this day
-        for order_num in range(actual_orders):
-            # Generate realistic order time
-            order_hour = generate_order_time(shop_state.markov.current_state, day)
-            order_time = datetime.combine(current_date, order_hour)
-            
-            # Generate the transaction
-            transaction = generate_single_transaction_with_state(
-                order_id_counter,
-                shop,
-                shop_products,
-                total_employees,
-                shop_state,
-                order_time,
-                avg_ticket
-            )
-            
-            if transaction:
-                order, items, payment = transaction
-                all_orders.append(order)
-                all_items.extend(items)
-                all_payments.append(payment)
-                order_id_counter += 1
-    
-    return all_orders, all_items, all_payments, order_id_counter
-
-def generate_single_transaction_with_state(
-    order_id: int,
-    shop: CoffeeShop,
+def generate_single_transaction(
+    order_id: int, 
+    shop: CoffeeShop, 
     shop_products: List[Product],
     total_employees: int,
-    shop_state: ShopStateTracker,
     ordered_at: datetime,
-    avg_ticket: float
+    avg_ticket: Optional[float] = None,
+    markov_state: str = 'normal'
 ) -> Optional[Tuple[Orders, List[OrderItem], Payment]]:
-    """Generate a single transaction using shop state"""
+    """Generate a single transaction at a specific time"""
     
     if not shop_products:
         return None
     
-    # Get available products
     available_products = [p for p in shop_products if p.product_is_available]
     if not available_products:
         available_products = shop_products
     
-    # Determine cart size based on average ticket
-    # Average item price is around 70 TL
+    # Determine cart size based on average ticket or state
+    if avg_ticket is None:
+        avg_ticket = random.gauss(120, 30)
+    
     avg_item_price = 70.0
     expected_items = max(1, int(avg_ticket / avg_item_price))
     
-    # Add randomness to cart size (Poisson-like)
-    cart_variety_size = min(
-        random.choices(
-            [1, 2, 3, 4, 5, 6],
-            weights=[0.15, 0.25, 0.25, 0.20, 0.10, 0.05],
-            k=1
-        )[0],
-        len(available_products)
-    )
+    # Cart size influenced by Markov state
+    if markov_state == 'booming':
+        cart_variety_size = min(
+            random.choices([1, 2, 3, 4, 5, 6], weights=[0.1, 0.2, 0.25, 0.2, 0.15, 0.1], k=1)[0],
+            len(available_products)
+        )
+    elif markov_state == 'struggling':
+        cart_variety_size = min(
+            random.choices([1, 2, 3, 4], weights=[0.3, 0.35, 0.25, 0.1], k=1)[0],
+            len(available_products)
+        )
+    else:
+        cart_variety_size = min(
+            random.choices([1, 2, 3, 4, 5], weights=[0.15, 0.25, 0.25, 0.2, 0.15], k=1)[0],
+            len(available_products)
+        )
     
-    # Apply Markov state modifier to ticket size
-    ticket_multiplier = shop_state.markov.get_ticket_multiplier()
-    effective_cart_size = max(1, min(
-        int(cart_variety_size * ticket_multiplier),
-        len(available_products)
-    ))
-    
-    # Select products
-    purchased_products = random.sample(available_products, k=effective_cart_size)
-    
+    purchased_products = random.sample(available_products, k=cart_variety_size)
     order_items = []
     subtotal = 0.0
     
     for prod in purchased_products:
-        # Quantity distribution influenced by state
-        if shop_state.markov.current_state == 'booming':
+        # Quantity influenced by state
+        if markov_state == 'booming':
             quantity = random.choices([1, 2, 3, 4], weights=[0.6, 0.25, 0.10, 0.05], k=1)[0]
         else:
             quantity = random.choices([1, 2, 3], weights=[0.85, 0.12, 0.03], k=1)[0]
@@ -747,9 +831,9 @@ def generate_single_transaction_with_state(
     total = round(subtotal + tax, 2)
     
     # Order status influenced by state
-    if shop_state.markov.current_state == 'booming':
+    if markov_state == 'booming':
         order_status = random.choices(['pending', 'served', 'cancelled'], weights=[0.65, 0.30, 0.05], k=1)[0]
-    elif shop_state.markov.current_state == 'struggling':
+    elif markov_state == 'struggling':
         order_status = random.choices(['pending', 'served', 'cancelled'], weights=[0.70, 0.20, 0.10], k=1)[0]
     else:
         order_status = random.choices(['pending', 'served', 'cancelled'], weights=[0.70, 0.25, 0.05], k=1)[0]
@@ -770,6 +854,84 @@ def generate_single_transaction_with_state(
     )
     
     return order, order_items, payment
+
+def generate_transactions_with_poisson(
+    order_id_counter: int,
+    shop: CoffeeShop,
+    shop_products: List[Product],
+    shop_state: ShopStateTracker,
+    total_employees: int,
+    max_days: Optional[int] = None
+) -> Tuple[List[Orders], List[OrderItem], List[Payment], int]:
+    """
+    Generate transactions using Poisson arrival process for realistic timing
+    """
+    all_orders = []
+    all_items = []
+    all_payments = []
+    
+    # Determine number of days to generate
+    if max_days is None:
+        days_open = (date.today() - shop.shop_opened_at).days
+    else:
+        days_open = max_days
+    
+    if days_open <= 0:
+        days_open = 30
+    
+    print(f"   Shop {shop.shop_id} ({shop.shop_name}): Generating {days_open} days with Poisson arrivals...")
+    
+    for day in range(days_open):
+        current_date = shop.shop_opened_at + timedelta(days=day)
+        
+        if current_date > date.today():
+            break
+        
+        # Advance shop state
+        actual_orders, avg_ticket, state_multiplier = shop_state.advance_day()
+        
+        # Generate Poisson arrival times for this day
+        arrival_times = shop_state.generate_arrivals_for_day(current_date)
+        
+        # Limit to expected number of orders (trim or expand)
+        if len(arrival_times) > actual_orders:
+            # Keep only first N arrivals (or randomly sample)
+            arrival_times = random.sample(arrival_times, actual_orders)
+        elif len(arrival_times) < actual_orders:
+            # Generate additional orders at random times
+            extra_needed = actual_orders - len(arrival_times)
+            opening_hour = shop_state.opening_hour
+            closing_hour = shop_state.closing_hour
+            for _ in range(extra_needed):
+                hour = random.randint(opening_hour, closing_hour - 1)
+                minute = random.randint(0, 59)
+                second = random.randint(0, 59)
+                extra_time = datetime.combine(current_date, time(hour, minute, second))
+                arrival_times.append(extra_time)
+        
+        # Sort arrivals chronologically
+        arrival_times.sort()
+        
+        # Generate transaction for each arrival
+        for arrival_time in arrival_times:
+            transaction = generate_single_transaction(
+                order_id_counter,
+                shop,
+                shop_products,
+                total_employees,
+                arrival_time,
+                avg_ticket,
+                shop_state.markov.current_state
+            )
+            
+            if transaction:
+                order, items, payment = transaction
+                all_orders.append(order)
+                all_items.extend(items)
+                all_payments.append(payment)
+                order_id_counter += 1
+    
+    return all_orders, all_items, all_payments, order_id_counter
 
 # ============ END OF MODIFIED FUNCTIONS ============
 
@@ -820,15 +982,15 @@ if __name__ == "__main__":
         if conn: conn.close()
         exit(1)
 
-    CHUNK_SIZE = 50
+    CHUNK_SIZE = 10  # Smaller chunks due to more complex generation
     total_processed = 0
     
-    print(f"\n🚀 Streaming data generation in chunks of {CHUNK_SIZE} shops with Random Walk & Markov processes...")
+    print(f"\n🚀 Streaming data generation with Poisson arrival processes...")
     
     try:
         for chunk_start in range(start_shop_id, start_shop_id + num_shops, CHUNK_SIZE):
             chunk_end = min(chunk_start + CHUNK_SIZE, start_shop_id + num_shops)
-            print(f"Processing shops {chunk_start} to {chunk_end - 1}...")
+            print(f"\nProcessing shops {chunk_start} to {chunk_end - 1}...")
             
             # Generate shops
             shops = [generate_coffee_shop(i) for i in range(chunk_start, chunk_end)]
@@ -897,7 +1059,7 @@ if __name__ == "__main__":
             for lookup_key, res_row in zip(prod_lookup, inserted_prod_ids):
                 product_id_map[lookup_key] = res_row[0]
 
-            # ============ MODIFIED: Generate transactions with time-series state ============
+            # Generate transactions with Poisson arrival process
             chunk_orders = []
             chunk_items = []
             chunk_payments = []
@@ -906,28 +1068,39 @@ if __name__ == "__main__":
                 shop_products = products_by_shop[shop.shop_id]
                 active_staff_count = len([e for e in employees_by_shop[shop.shop_id] if e.employee_current_status == 'active'])
                 
-                # Initialize shop state with random walk and Markov
-                base_orders = random.uniform(10, 50)  # Base daily orders
-                shop_state = ShopStateTracker(shop.shop_id, base_orders)
+                # Extract opening and closing hours from shop
+                if shop.operating_hours:
+                    opening_hour = shop.operating_hours[0][0].hour
+                    closing_hour = shop.operating_hours[0][1].hour
+                else:
+                    opening_hour = 8
+                    closing_hour = 22
                 
-                # Generate transactions using random walk and Markov
-                orders, items, payments, order_id_counter = generate_transactions_for_shop(
+                # Initialize shop state with Poisson process
+                shop_state = ShopStateTracker(
+                    shop.shop_id,
+                    opening_hour=opening_hour,
+                    closing_hour=closing_hour
+                )
+                
+                # Generate transactions using Poisson arrivals
+                orders, items, payments, order_id_counter = generate_transactions_with_poisson(
                     order_id_counter,
                     shop,
                     shop_products,
                     shop_state,
                     active_staff_count,
-                    max_days=None  # Generate from shop opening to today
+                    max_days=None
                 )
                 
                 chunk_orders.extend(orders)
                 chunk_items.extend(items)
                 chunk_payments.extend(payments)
                 
-                # Optional: Print summary for this shop
+                # Print summary
                 if len(orders) > 0:
-                    print(f"   Shop {shop.shop_id} ({shop.shop_name}): {len(orders)} orders over {shop_state.day_counter} days, "
-                          f"avg {len(orders)/max(1, shop_state.day_counter):.1f}/day")
+                    print(f"   ✓ Generated {len(orders)} orders over {shop_state.day_counter} days "
+                          f"(avg {len(orders)/max(1, shop_state.day_counter):.1f}/day)")
 
             # Insert orders
             order_id_map = {}
@@ -975,9 +1148,9 @@ if __name__ == "__main__":
 
             conn.commit()
             total_processed += len(shops)
-            print(f"   -> Progress: Completed {total_processed}/{num_shops} shops cleanly.")
+            print(f"   -> Progress: Completed {total_processed}/{num_shops} shops")
 
-        print(f"\n🎉 Grand Success! All {num_shops} shops with time-series data written to database!")
+        print(f"\n🎉 Grand Success! All {num_shops} shops with Poisson arrival data written to database!")
 
     except Exception as error:
         print("\n❌ Error during execution chunk loop:", error)
