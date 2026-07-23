@@ -1,17 +1,14 @@
 from __future__ import annotations
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import datetime 
 from datetime import date, timedelta, time, datetime
 import random
 from faker import Faker
-from typing import Optional, List, Dict, Tuple, Any
+from typing import Optional, List, Dict, Tuple
 import psycopg2
-from psycopg2.extras import execute_values
+from psycopg2.extras import execute_values  # <-- Added for high-speed bulk inserts
 import json
 import re
-import numpy as np
-import math
-from enum import Enum
 
 fake = Faker('tr_TR')
 existing_address_strings = set()
@@ -38,767 +35,6 @@ INFLATION_DATA = {
     2025: 8.136,
     2026: 10.658
 }
-
-# ============ STOCHASTIC SHOCK SYSTEM ============
-
-class ShockType(Enum):
-    """Types of stochastic shocks that can occur"""
-    COMPETITOR_OPENING = "competitor_opening"
-    VIRAL_TREND = "viral_trend"
-    SUPPLY_CHAIN = "supply_chain"
-    ECONOMIC_CRISIS = "economic_crisis"
-    LOCAL_EVENT = "local_event"
-    SEASONAL_SHIFT = "seasonal_shift"
-    MENU_CHANGE = "menu_change"
-    HEALTH_CRISIS = "health_crisis"
-    SOCIAL_MEDIA = "social_media"
-    WEATHER_EVENT = "weather_event"
-
-@dataclass
-class StochasticShock:
-    """Represents a single stochastic shock event"""
-    shock_id: int
-    shop_id: int
-    shock_type: ShockType
-    occurrence_date: date
-    magnitude: float  # Effect size (e.g., 0.30 = 30% change)
-    duration_days: int  # How long the shock lasts
-    decay_rate: float  # How quickly it fades (0 = no decay, 1 = immediate)
-    is_permanent: bool
-    affected_metric: str  # 'orders', 'prices', 'both', 'product_specific'
-    affected_products: List[str] = field(default_factory=list)
-    description: str = ""
-    
-    # For temporary shocks
-    current_effect: float = 1.0  # Current multiplier (starts at 1 + magnitude)
-    days_remaining: int = 0
-    
-    def apply_effect(self, days_since_occurrence: int) -> float:
-        """Calculate the current effect multiplier for this shock"""
-        if self.is_permanent:
-            # Permanent shock: full effect forever
-            return 1.0 + self.magnitude
-        else:
-            # Temporary shock with decay
-            if days_since_occurrence >= self.duration_days:
-                return 1.0  # Shock has ended
-            
-            # Exponential decay or linear decay
-            progress = days_since_occurrence / self.duration_days
-            if self.decay_rate < 0.5:
-                # Slow decay: exponential
-                decay_factor = math.exp(-self.decay_rate * days_since_occurrence)
-            else:
-                # Fast decay: linear
-                decay_factor = 1 - progress
-            
-            effect = 1.0 + self.magnitude * decay_factor
-            return max(0.5, min(2.5, effect))  # Cap extreme effects
-
-class ShockGenerator:
-    """Generates and manages stochastic shocks"""
-    
-    # Shock type definitions
-    SHOCK_DEFINITIONS = {
-        ShockType.COMPETITOR_OPENING: {
-            'probability': 0.02,  # 2% per month
-            'magnitude_range': (-0.30, -0.05),  # -5% to -30% traffic
-            'duration_range': (180, 730),  # 6-24 months (often permanent)
-            'is_permanent_probability': 0.85,
-            'decay_rate_range': (0.001, 0.01),
-            'affected_metrics': ['orders', 'revenue'],
-            'description_template': "Competitor opened nearby, stealing {magnitude:.0%} of customers"
-        },
-        ShockType.VIRAL_TREND: {
-            'probability': 0.015,  # 1.5% per month
-            'magnitude_range': (0.15, 1.0),  # 15% to 100% increase
-            'duration_range': (7, 30),  # 1-4 weeks
-            'is_permanent_probability': 0.05,
-            'decay_rate_range': (0.05, 0.15),
-            'affected_metrics': ['orders', 'revenue', 'product_specific'],
-            'description_template': "Product went viral on TikTok - {product} sales exploded"
-        },
-        ShockType.SUPPLY_CHAIN: {
-            'probability': 0.025,  # 2.5% per month
-            'magnitude_range': (-0.20, -0.02),  # -2% to -20% availability
-            'duration_range': (14, 90),  # 2 weeks to 3 months
-            'is_permanent_probability': 0.1,
-            'decay_rate_range': (0.02, 0.08),
-            'affected_metrics': ['prices', 'availability'],
-            'description_template': "Supply chain disruption - {product} prices up {magnitude:.0%}"
-        },
-        ShockType.ECONOMIC_CRISIS: {
-            'probability': 0.01,  # 1% per month
-            'magnitude_range': (-0.40, -0.10),  # -10% to -40% traffic
-            'duration_range': (60, 365),  # 2-12 months
-            'is_permanent_probability': 0.2,
-            'decay_rate_range': (0.005, 0.02),
-            'affected_metrics': ['orders', 'revenue', 'prices'],
-            'description_template': "Economic downturn - spending decreased by {magnitude:.0%}"
-        },
-        ShockType.LOCAL_EVENT: {
-            'probability': 0.04,  # 4% per month
-            'magnitude_range': (-0.30, 0.30),  # -30% to +30% traffic
-            'duration_range': (1, 7),  # 1-7 days
-            'is_permanent_probability': 0.0,
-            'decay_rate_range': (0.1, 0.5),
-            'affected_metrics': ['orders'],
-            'description_template': "Local event affected traffic by {magnitude:.0%}"
-        },
-        ShockType.SEASONAL_SHIFT: {
-            'probability': 0.03,  # 3% per month
-            'magnitude_range': (-0.15, 0.15),  # -15% to +15% traffic
-            'duration_range': (30, 90),  # 1-3 months
-            'is_permanent_probability': 0.0,
-            'decay_rate_range': (0.02, 0.05),
-            'affected_metrics': ['orders'],
-            'description_template': "Seasonal shift in customer behavior"
-        },
-        ShockType.MENU_CHANGE: {
-            'probability': 0.02,  # 2% per month
-            'magnitude_range': (-0.10, 0.20),  # -10% to +20% revenue
-            'duration_range': (30, 180),  # 1-6 months
-            'is_permanent_probability': 0.6,
-            'decay_rate_range': (0.01, 0.03),
-            'affected_metrics': ['revenue', 'product_specific'],
-            'description_template': "New menu items - {product} performance changed"
-        },
-        ShockType.HEALTH_CRISIS: {
-            'probability': 0.005,  # 0.5% per month (rare but impactful)
-            'magnitude_range': (-0.50, -0.15),  # -15% to -50% traffic
-            'duration_range': (30, 180),  # 1-6 months
-            'is_permanent_probability': 0.05,
-            'decay_rate_range': (0.01, 0.05),
-            'affected_metrics': ['orders', 'revenue'],
-            'description_template': "Health concern reduced foot traffic by {magnitude:.0%}"
-        },
-        ShockType.SOCIAL_MEDIA: {
-            'probability': 0.03,  # 3% per month
-            'magnitude_range': (-0.20, 0.50),  # -20% to +50% traffic
-            'duration_range': (7, 21),  # 1-3 weeks
-            'is_permanent_probability': 0.1,
-            'decay_rate_range': (0.05, 0.15),
-            'affected_metrics': ['orders', 'revenue'],
-            'description_template': "Social media mention - {magnitude:.0%} change in traffic"
-        },
-        ShockType.WEATHER_EVENT: {
-            'probability': 0.05,  # 5% per month
-            'magnitude_range': (-0.40, 0.10),  # -40% to +10% traffic
-            'duration_range': (1, 3),  # 1-3 days
-            'is_permanent_probability': 0.0,
-            'decay_rate_range': (0.2, 1.0),
-            'affected_metrics': ['orders'],
-            'description_template': "Weather event - {magnitude:.0%} change in daily traffic"
-        }
-    }
-    
-    def __init__(self, shop_id: int, seed: Optional[int] = None):
-        self.shop_id = shop_id
-        self.shock_counter = 0
-        self.active_shocks: List[StochasticShock] = []
-        self.shock_history: List[StochasticShock] = []
-        
-        if seed is not None:
-            random.seed(seed)
-    
-    def check_for_shocks(self, current_date: date, shop_state: Any) -> List[StochasticShock]:
-        """
-        Check if any new shocks should occur on this date
-        Returns list of new shocks
-        """
-        new_shocks = []
-        
-        # Only check for new shocks at the start of each month
-        if current_date.day != 1:
-            return new_shocks
-        
-        # Check each shock type for probability
-        for shock_type, definition in self.SHOCK_DEFINITIONS.items():
-            # Base probability per month
-            prob = definition['probability']
-            
-            # Adjust probability based on shop state
-            # e.g., booming shops more likely to attract competitors
-            if shock_type == ShockType.COMPETITOR_OPENING:
-                if shop_state.markov.current_state == 'booming':
-                    prob *= 1.5
-                elif shop_state.markov.current_state == 'struggling':
-                    prob *= 0.5
-            
-            # Check if shock occurs
-            if random.random() < prob:
-                shock = self._create_shock(shock_type, current_date, shop_state)
-                if shock:
-                    new_shocks.append(shock)
-                    self.active_shocks.append(shock)
-                    self.shock_history.append(shock)
-                    self.shock_counter += 1
-        
-        return new_shocks
-    
-    def _create_shock(self, shock_type: ShockType, occurrence_date: date, shop_state: Any) -> Optional[StochasticShock]:
-        """Create a new shock event"""
-        definition = self.SHOCK_DEFINITIONS[shock_type]
-        
-        # Generate magnitude (can be positive or negative)
-        mag_min, mag_max = definition['magnitude_range']
-        magnitude = random.uniform(mag_min, mag_max)
-        
-        # Round to nearest 5% for cleaner data
-        magnitude = round(magnitude / 0.05) * 0.05
-        
-        # Generate duration
-        dur_min, dur_max = definition['duration_range']
-        duration = random.randint(dur_min, dur_max)
-        
-        # Determine if permanent
-        is_permanent = random.random() < definition['is_permanent_probability']
-        
-        # Generate decay rate
-        decay_min, decay_max = definition['decay_rate_range']
-        decay_rate = random.uniform(decay_min, decay_max)
-        
-        # Determine affected products (for product-specific shocks)
-        affected_products = []
-        if 'product_specific' in definition['affected_metrics']:
-            # Select random products from shop's menu
-            if hasattr(shop_state, 'available_products') and shop_state.available_products:
-                num_products = random.randint(1, min(3, len(shop_state.available_products)))
-                affected_products = random.sample(shop_state.available_products, num_products)
-        
-        # Create description
-        description = definition['description_template']
-        if '{product}' in description:
-            product_name = random.choice(affected_products) if affected_products else "coffee"
-            description = description.replace('{product}', product_name)
-        description = description.replace('{magnitude}', f"{abs(magnitude):.0%}")
-        
-        # Determine affected metric
-        affected_metric = random.choice(definition['affected_metrics'])
-        
-        return StochasticShock(
-            shock_id=self.shock_counter + 1,
-            shop_id=self.shop_id,
-            shock_type=shock_type,
-            occurrence_date=occurrence_date,
-            magnitude=magnitude,
-            duration_days=duration,
-            decay_rate=decay_rate,
-            is_permanent=is_permanent,
-            affected_metric=affected_metric,
-            affected_products=affected_products,
-            description=description,
-            days_remaining=duration
-        )
-    
-    def update_shocks(self, current_date: date) -> Dict[str, float]:
-        """
-        Update active shocks and return current effect multipliers
-        Returns dict with metrics and their multipliers
-        """
-        # Remove expired shocks
-        self.active_shocks = [s for s in self.active_shocks 
-                             if not s.is_permanent and 
-                             (current_date - s.occurrence_date).days < s.duration_days]
-        
-        # Calculate effects
-        effects = {
-            'orders': 1.0,
-            'revenue': 1.0,
-            'prices': 1.0,
-            'availability': 1.0
-        }
-        
-        for shock in self.active_shocks:
-            days_since = (current_date - shock.occurrence_date).days
-            effect = shock.apply_effect(days_since)
-            
-            # Apply to affected metrics
-            if shock.affected_metric == 'orders' or shock.affected_metric == 'both':
-                effects['orders'] *= effect
-                effects['revenue'] *= effect
-            elif shock.affected_metric == 'prices':
-                effects['prices'] *= effect
-            elif shock.affected_metric == 'revenue':
-                effects['revenue'] *= effect
-            elif shock.affected_metric == 'availability':
-                effects['availability'] *= effect
-            elif shock.affected_metric == 'product_specific':
-                # Product-specific effects handled separately
-                pass
-        
-        # Cap extreme effects
-        for key in effects:
-            effects[key] = max(0.3, min(2.5, effects[key]))
-        
-        return effects
-    
-    def get_shock_description(self) -> str:
-        """Get description of current active shocks"""
-        if not self.active_shocks:
-            return "No active shocks"
-        
-        descriptions = []
-        for shock in self.active_shocks[:3]:  # Show top 3
-            days_remaining = shock.duration_days - (datetime.now().date() - shock.occurrence_date).days
-            desc = f"{shock.shock_type.value}: {shock.description} ({days_remaining} days remaining)"
-            descriptions.append(desc)
-        
-        return "; ".join(descriptions)
-
-# ============ MODIFIED SHOP STATE TRACKER WITH SHOCKS ============
-
-class ShopStateTracker:
-    """Tracks all time-series state for a shop including stochastic shocks"""
-    
-    def __init__(self, shop_id: int, opening_hour: int = 8, closing_hour: int = 22):
-        self.shop_id = shop_id
-        self.opening_hour = opening_hour
-        self.closing_hour = closing_hour
-        
-        # Base arrival rate (customers per minute)
-        self.base_arrival_rate = random.uniform(0.3, 0.8)
-        
-        # Initialize intensity profile
-        self.intensity_profile = TimeOfDayIntensity(opening_hour, closing_hour)
-        
-        # Initialize Poisson arrival process
-        self.arrival_process = PoissonArrivalProcess(
-            base_rate=self.base_arrival_rate,
-            intensity_profile=self.intensity_profile
-        )
-        
-        # Initialize random walk for daily total orders
-        avg_intensity = self.intensity_profile.get_average_intensity()
-        initial_daily_orders = int(self.base_arrival_rate * (closing_hour - opening_hour) * 60 * avg_intensity)
-        initial_daily_orders = max(10, initial_daily_orders)
-        
-        self.order_walk = RandomWalkGenerator(
-            initial_value=initial_daily_orders,
-            volatility=random.uniform(0.10, 0.20),
-            drift=random.uniform(-0.0002, 0.001),
-            mean_reversion=0.05,
-            long_term_mean=initial_daily_orders
-        )
-        
-        # Initialize random walk for average ticket
-        self.current_avg_ticket = random.gauss(120, 30)
-        self.ticket_walk = RandomWalkGenerator(
-            initial_value=self.current_avg_ticket,
-            volatility=0.08,
-            drift=0.0003,
-            mean_reversion=0.03,
-            long_term_mean=self.current_avg_ticket
-        )
-        
-        # Initialize Markov chain
-        self.markov = MarkovChain(
-            initial_state=random.choices(['booming', 'normal', 'slow'], 
-                                        weights=[0.15, 0.65, 0.20])[0]
-        )
-        
-        # Initialize shock generator
-        self.shock_generator = ShockGenerator(shop_id)
-        self.shock_effects = {'orders': 1.0, 'revenue': 1.0, 'prices': 1.0, 'availability': 1.0}
-        
-        # Historical tracking
-        self.daily_orders = []
-        self.daily_revenue = []
-        self.day_counter = 0
-        self.total_arrivals = []
-        self.shock_log = []
-    
-    def advance_day(self, current_date: date) -> Tuple[int, float, float, Dict]:
-        """Advance one day and return (actual_orders, avg_ticket, state_multiplier, shock_effects)"""
-        
-        # Check for new stochastic shocks (monthly check)
-        new_shocks = self.shock_generator.check_for_shocks(current_date, self)
-        if new_shocks:
-            for shock in new_shocks:
-                self.shock_log.append({
-                    'date': current_date,
-                    'shock_type': shock.shock_type.value,
-                    'magnitude': shock.magnitude,
-                    'description': shock.description
-                })
-                print(f"   ⚡ SHOCK at Shop {self.shop_id}: {shock.description}")
-        
-        # Update active shocks
-        self.shock_effects = self.shock_generator.update_shocks(current_date)
-        
-        # Update Markov state
-        if self.day_counter % random.randint(5, 10) == 0:
-            self.markov.step()
-        
-        # Update random walks
-        expected_daily_orders = self.order_walk.step()
-        self.current_avg_ticket = self.ticket_walk.step()
-        
-        # Apply Markov state multiplier
-        state_multiplier = self.markov.get_order_multiplier()
-        self.arrival_process.set_state_multiplier(state_multiplier)
-        
-        # Apply shock effects
-        order_shock_multiplier = self.shock_effects.get('orders', 1.0)
-        expected_daily_orders *= order_shock_multiplier
-        
-        # Apply day-of-week effects
-        day_of_week = (self.day_counter % 7)
-        dow_multiplier = [1.0, 0.95, 0.95, 0.95, 1.1, 1.3, 1.2][day_of_week]
-        expected_daily_orders *= dow_multiplier
-        
-        # Apply seasonality
-        month = (self.day_counter // 30) % 12
-        season_multiplier = [0.8, 0.85, 0.9, 1.0, 1.1, 1.15, 
-                           1.1, 1.0, 1.05, 1.0, 0.9, 0.85][month]
-        expected_daily_orders *= season_multiplier
-        
-        # Generate actual orders using Poisson
-        try:
-            actual_orders = np.random.poisson(max(1, int(expected_daily_orders)))
-        except:
-            # Fallback
-            lam = max(1, int(expected_daily_orders))
-            actual_orders = random.choices(range(lam*2), 
-                                          weights=[(lam**k * math.exp(-lam)) / math.factorial(k) 
-                                                  for k in range(lam*2)])[0]
-        
-        self.daily_orders.append(actual_orders)
-        self.day_counter += 1
-        
-        return actual_orders, self.current_avg_ticket, state_multiplier, self.shock_effects
-    
-    def generate_arrivals_for_day(self, current_date: date) -> List[datetime]:
-        """Generate customer arrival times for a specific day using Poisson process"""
-        opening_time = time(self.opening_hour, 0)
-        closing_time = time(self.closing_hour, 0)
-        
-        # Adjust arrival rate based on current state and shocks
-        state_multiplier = self.markov.get_order_multiplier()
-        shock_multiplier = self.shock_effects.get('orders', 1.0)
-        self.arrival_process.set_state_multiplier(state_multiplier * shock_multiplier)
-        
-        # Generate arrival times
-        arrivals = self.arrival_process.generate_arrival_times(
-            opening_time, closing_time, 
-            max_arrivals=500
-        )
-        
-        # Attach dates to arrivals
-        dated_arrivals = []
-        for arr in arrivals:
-            dated_arrival = datetime.combine(
-                current_date,
-                time(arr.hour, arr.minute, arr.second)
-            )
-            dated_arrivals.append(dated_arrival)
-        
-        self.total_arrivals.extend(dated_arrivals)
-        return dated_arrivals
-
-# ============ MODIFIED TIME OF DAY INTENSITY CLASS ============
-
-class TimeOfDayIntensity:
-    """Models customer arrival intensity throughout the day"""
-    
-    def __init__(self, opening_hour: int = 8, closing_hour: int = 22):
-        self.opening_hour = opening_hour
-        self.closing_hour = closing_hour
-        
-        self.hourly_intensity = {
-            8: 0.6, 9: 1.8, 10: 1.5,
-            11: 1.0, 12: 0.9,
-            13: 1.4, 14: 1.6,
-            15: 1.1, 16: 1.0, 17: 0.9,
-            18: 1.3, 19: 1.5, 20: 1.2,
-            21: 0.7, 22: 0.4
-        }
-        
-        self.intensity_cache = {}
-        self._build_intensity_cache()
-    
-    def _build_intensity_cache(self):
-        for minute in range(0, 24 * 60):
-            hour = minute // 60
-            minute_of_hour = minute % 60
-            
-            h1 = hour
-            h2 = (hour + 1) % 24
-            
-            i1 = self.hourly_intensity.get(h1, 0.5)
-            i2 = self.hourly_intensity.get(h2, 0.5)
-            
-            fraction = minute_of_hour / 60.0
-            intensity = i1 * (1 - fraction) + i2 * fraction
-            
-            if hour < self.opening_hour or hour > self.closing_hour:
-                intensity = 0.0
-            elif hour == self.opening_hour and minute_of_hour < 30:
-                intensity = intensity * (minute_of_hour / 30.0)
-            elif hour == self.closing_hour and minute_of_hour > 30:
-                intensity = intensity * (1 - (minute_of_hour - 30) / 30.0)
-                if minute_of_hour > 45:
-                    intensity = 0.0
-            
-            self.intensity_cache[minute] = max(0, intensity)
-    
-    def get_intensity(self, minute_of_day: int) -> float:
-        return self.intensity_cache.get(minute_of_day, 0.0)
-    
-    def get_average_intensity(self, base_rate: float = 1.0) -> float:
-        total = sum(self.intensity_cache.values())
-        return (total / (24 * 60)) * base_rate
-
-# ============ MODIFIED POISSON ARRIVAL PROCESS ============
-
-class PoissonArrivalProcess:
-    """Non-homogeneous Poisson process for customer arrivals"""
-    
-    def __init__(self, base_rate: float, intensity_profile: TimeOfDayIntensity):
-        self.base_rate = base_rate
-        self.intensity_profile = intensity_profile
-        self.state_multiplier = 1.0
-        self.arrival_history = []
-        
-    def set_state_multiplier(self, multiplier: float):
-        self.state_multiplier = multiplier
-    
-    def get_rate_at(self, minute_of_day: int) -> float:
-        base_intensity = self.intensity_profile.get_intensity(minute_of_day)
-        return self.base_rate * base_intensity * self.state_multiplier
-    
-    def generate_arrival_times(self, start_time: time, end_time: time, 
-                               max_arrivals: int = 1000) -> List[datetime]:
-        start_minutes = start_time.hour * 60 + start_time.minute
-        end_minutes = end_time.hour * 60 + end_time.minute
-        
-        arrivals = []
-        current_time = start_minutes
-        
-        max_rate = max([self.get_rate_at(m) for m in range(start_minutes, end_minutes)]) * 1.2
-        
-        while len(arrivals) < max_arrivals:
-            if max_rate > 0:
-                u = random.random()
-                inter_arrival = -math.log(u) / max_rate if u > 0 else 0
-            else:
-                break
-            
-            current_time += inter_arrival * 60
-            current_time = min(current_time, end_minutes)
-            
-            if current_time >= end_minutes:
-                break
-                
-            current_minute = int(current_time)
-            current_rate = self.get_rate_at(current_minute)
-            
-            accept_prob = current_rate / max_rate if max_rate > 0 else 0
-            
-            if random.random() < accept_prob:
-                hours = current_minute // 60
-                mins = current_minute % 60
-                seconds = random.randint(0, 59)
-                arrival_dt = datetime.combine(
-                    date.today(), 
-                    time(hours, mins, seconds)
-                )
-                arrivals.append(arrival_dt)
-        
-        return arrivals
-
-# ============ MODIFIED GENERATE TRANSACTIONS FUNCTION ============
-
-def generate_transactions_with_shocks(
-    order_id_counter: int,
-    shop: CoffeeShop,
-    shop_products: List[Product],
-    shop_state: ShopStateTracker,
-    total_employees: int,
-    max_days: Optional[int] = None
-) -> Tuple[List[Orders], List[OrderItem], List[Payment], int, List[Dict]]:
-    """
-    Generate transactions with stochastic shocks
-    """
-    all_orders = []
-    all_items = []
-    all_payments = []
-    shock_log = []
-    
-    if max_days is None:
-        days_open = (date.today() - shop.shop_opened_at).days
-    else:
-        days_open = max_days
-    
-    if days_open <= 0:
-        days_open = 30
-    
-    for day in range(days_open):
-        current_date = shop.shop_opened_at + timedelta(days=day)
-        
-        if current_date > date.today():
-            break
-        
-        # Advance shop state (includes shock checks)
-        actual_orders, avg_ticket, state_multiplier, shock_effects = shop_state.advance_day(current_date)
-        
-        # Log any new shocks
-        if shop_state.shock_log and len(shop_state.shock_log) > 0:
-            latest_shock = shop_state.shock_log[-1]
-            if latest_shock['date'] == current_date:
-                shock_log.append(latest_shock)
-        
-        # Generate Poisson arrival times
-        arrival_times = shop_state.generate_arrivals_for_day(current_date)
-        
-        # Adjust for shock effects on pricing
-        price_multiplier = shock_effects.get('prices', 1.0)
-        
-        # Limit to expected number of orders
-        if len(arrival_times) > actual_orders:
-            arrival_times = random.sample(arrival_times, actual_orders)
-        elif len(arrival_times) < actual_orders:
-            extra_needed = actual_orders - len(arrival_times)
-            opening_hour = shop_state.opening_hour
-            closing_hour = shop_state.closing_hour
-            for _ in range(extra_needed):
-                hour = random.randint(opening_hour, closing_hour - 1)
-                minute = random.randint(0, 59)
-                second = random.randint(0, 59)
-                extra_time = datetime.combine(current_date, time(hour, minute, second))
-                arrival_times.append(extra_time)
-        
-        arrival_times.sort()
-        
-        # Generate transaction for each arrival
-        for arrival_time in arrival_times:
-            # Apply price shock effects
-            temp_price_multiplier = price_multiplier
-            
-            transaction = generate_single_transaction_with_shocks(
-                order_id_counter,
-                shop,
-                shop_products,
-                total_employees,
-                arrival_time,
-                avg_ticket,
-                shop_state.markov.current_state,
-                temp_price_multiplier,
-                shop_state.shock_effects
-            )
-            
-            if transaction:
-                order, items, payment = transaction
-                all_orders.append(order)
-                all_items.extend(items)
-                all_payments.append(payment)
-                order_id_counter += 1
-    
-    return all_orders, all_items, all_payments, order_id_counter, shock_log
-
-def generate_single_transaction_with_shocks(
-    order_id: int,
-    shop: CoffeeShop,
-    shop_products: List[Product],
-    total_employees: int,
-    ordered_at: datetime,
-    avg_ticket: float,
-    markov_state: str,
-    price_multiplier: float = 1.0,
-    shock_effects: Dict = None
-) -> Optional[Tuple[Orders, List[OrderItem], Payment]]:
-    """Generate a single transaction with shock effects"""
-    
-    if not shop_products:
-        return None
-    
-    available_products = [p for p in shop_products if p.product_is_available]
-    if not available_products:
-        available_products = shop_products
-    
-    # Apply shock effects to availability
-    if shock_effects and shock_effects.get('availability', 1.0) < 0.8:
-        # Some products unavailable due to supply chain shock
-        availability_ratio = shock_effects['availability']
-        available_count = max(1, int(len(available_products) * availability_ratio))
-        available_products = random.sample(available_products, available_count)
-    
-    # Determine cart size based on average ticket and state
-    avg_item_price = 70.0
-    expected_items = max(1, int(avg_ticket / avg_item_price))
-    
-    if markov_state == 'booming':
-        cart_variety_size = min(
-            random.choices([1, 2, 3, 4, 5, 6], weights=[0.1, 0.2, 0.25, 0.2, 0.15, 0.1], k=1)[0],
-            len(available_products)
-        )
-    elif markov_state == 'struggling':
-        cart_variety_size = min(
-            random.choices([1, 2, 3, 4], weights=[0.3, 0.35, 0.25, 0.1], k=1)[0],
-            len(available_products)
-        )
-    else:
-        cart_variety_size = min(
-            random.choices([1, 2, 3, 4, 5], weights=[0.15, 0.25, 0.25, 0.2, 0.15], k=1)[0],
-            len(available_products)
-        )
-    
-    purchased_products = random.sample(available_products, k=cart_variety_size)
-    order_items = []
-    subtotal = 0.0
-    
-    for prod in purchased_products:
-        if markov_state == 'booming':
-            quantity = random.choices([1, 2, 3, 4], weights=[0.6, 0.25, 0.10, 0.05], k=1)[0]
-        else:
-            quantity = random.choices([1, 2, 3], weights=[0.85, 0.12, 0.03], k=1)[0]
-        
-        base_uninflated_price = PRODUCT_BASELINE[prod.product_category][prod.product_name]
-        unit_price = calculate_historical_price(base_uninflated_price, shop, total_employees, ordered_at.year)
-        
-        # Apply price shock multiplier
-        unit_price *= price_multiplier
-        
-        line_total = round(unit_price * quantity, 2)
-        
-        order_items.append(OrderItem(
-            shop_id=shop.shop_id,
-            order_id=order_id,
-            product_id=prod.product_id,
-            quantity=quantity,
-            unit_price=unit_price,
-            line_total=line_total
-        ))
-        subtotal += line_total
-    
-    subtotal = round(subtotal, 2)
-    tax = round(subtotal * 0.10, 2)
-    total = round(subtotal + tax, 2)
-    
-    if markov_state == 'booming':
-        order_status = random.choices(['pending', 'served', 'cancelled'], weights=[0.65, 0.30, 0.05], k=1)[0]
-    elif markov_state == 'struggling':
-        order_status = random.choices(['pending', 'served', 'cancelled'], weights=[0.70, 0.20, 0.10], k=1)[0]
-    else:
-        order_status = random.choices(['pending', 'served', 'cancelled'], weights=[0.70, 0.25, 0.05], k=1)[0]
-    
-    order = Orders(
-        order_id=order_id, shop_id=shop.shop_id, ordered_at=ordered_at,
-        order_status=order_status, order_subtotal=subtotal, order_tax=tax, order_total=total
-    )
-    
-    pay_method = random.choice(PAYMENT_METHOD)
-    pay_status = 'completed' if order_status == 'completed' else (
-        'cancelled' if order_status == 'cancelled' else random.choice(['completed', 'cancelled'])
-    )
-    
-    payment = Payment(
-        shop_id=shop.shop_id, order_id=order_id, paid_at=ordered_at,
-        payment_method=pay_method, payment_status=pay_status, amount=total
-    )
-    
-    return order, order_items, payment
-
 
 @dataclass
 class Address:
@@ -882,6 +118,7 @@ def generate_unique_address() -> Address:
         district = random.choice(TURKIYE_GEOGRAPHY[city])
         building_no = str(random.randint(1, 120))
         street_no = str(random.randint(1, 180))
+        
         
         addr = Address(building_no=building_no, street_no=street_no, district=district, city=city)
         address_string = addr.to_string()
@@ -1159,60 +396,40 @@ def generate_shop_staff(shop: CoffeeShop) -> List[Employee]:
             
     return all_employees
 
-# ============ MODIFIED: Transaction generation with Poisson arrivals ============
-
 def generate_single_transaction(
     order_id: int, 
     shop: CoffeeShop, 
     shop_products: List[Product],
-    total_employees: int,
-    ordered_at: datetime,
-    avg_ticket: Optional[float] = None,
-    markov_state: str = 'normal'
+    total_employees: int
 ) -> Optional[Tuple[Orders, List[OrderItem], Payment]]:
-    """Generate a single transaction at a specific time"""
-    
     if not shop_products:
-        return None
+        return None 
+        
+    today = date.today()
+    days_open = (today - shop.shop_opened_at).days
     
+    if days_open <= 0:
+        ordered_at = datetime.combine(shop.shop_opened_at, datetime.min.time())
+    else:
+        random_days = random.randint(0, days_open)
+        ordered_date = shop.shop_opened_at + timedelta(days=random_days)
+        random_time = time(random.randint(7, 22), random.randint(0, 59))
+        ordered_at = datetime.combine(ordered_date, random_time)
+        
     available_products = [p for p in shop_products if p.product_is_available]
     if not available_products:
-        available_products = shop_products
-    
-    # Determine cart size based on average ticket or state
-    if avg_ticket is None:
-        avg_ticket = random.gauss(120, 30)
-    
-    avg_item_price = 70.0
-    expected_items = max(1, int(avg_ticket / avg_item_price))
-    
-    # Cart size influenced by Markov state
-    if markov_state == 'booming':
-        cart_variety_size = min(
-            random.choices([1, 2, 3, 4, 5, 6], weights=[0.1, 0.2, 0.25, 0.2, 0.15, 0.1], k=1)[0],
-            len(available_products)
-        )
-    elif markov_state == 'struggling':
-        cart_variety_size = min(
-            random.choices([1, 2, 3, 4], weights=[0.3, 0.35, 0.25, 0.1], k=1)[0],
-            len(available_products)
-        )
-    else:
-        cart_variety_size = min(
-            random.choices([1, 2, 3, 4, 5], weights=[0.15, 0.25, 0.25, 0.2, 0.15], k=1)[0],
-            len(available_products)
-        )
+        available_products = shop_products 
+        
+    max_cart_variety = min(len(available_products), 4)
+    cart_variety_size = random.choices([1, 2, 3, 4], weights=[0.50, 0.35, 0.12, 0.03], k=1)[0]
+    cart_variety_size = min(cart_variety_size, max_cart_variety)
     
     purchased_products = random.sample(available_products, k=cart_variety_size)
     order_items = []
     subtotal = 0.0
     
     for prod in purchased_products:
-        # Quantity influenced by state
-        if markov_state == 'booming':
-            quantity = random.choices([1, 2, 3, 4], weights=[0.6, 0.25, 0.10, 0.05], k=1)[0]
-        else:
-            quantity = random.choices([1, 2, 3], weights=[0.85, 0.12, 0.03], k=1)[0]
+        quantity = random.choices([1, 2, 3], weights=[0.85, 0.12, 0.03], k=1)[0]
         
         base_uninflated_price = PRODUCT_BASELINE[prod.product_category][prod.product_name]
         unit_price = calculate_historical_price(base_uninflated_price, shop, total_employees, ordered_at.year)
@@ -1227,18 +444,12 @@ def generate_single_transaction(
             line_total=line_total
         ))
         subtotal += line_total
-    
+        
     subtotal = round(subtotal, 2)
     tax = round(subtotal * 0.10, 2)
     total = round(subtotal + tax, 2)
     
-    # Order status influenced by state
-    if markov_state == 'booming':
-        order_status = random.choices(['pending', 'served', 'cancelled'], weights=[0.65, 0.30, 0.05], k=1)[0]
-    elif markov_state == 'struggling':
-        order_status = random.choices(['pending', 'served', 'cancelled'], weights=[0.70, 0.20, 0.10], k=1)[0]
-    else:
-        order_status = random.choices(['pending', 'served', 'cancelled'], weights=[0.70, 0.25, 0.05], k=1)[0]
+    order_status = random.choices(['pending', 'served', 'cancelled'], weights=[0.70, 0.25, 0.05], k=1)[0]
     
     order = Orders(
         order_id=order_id, shop_id=shop.shop_id, ordered_at=ordered_at,
@@ -1246,95 +457,14 @@ def generate_single_transaction(
     )
     
     pay_method = random.choice(PAYMENT_METHOD)
-    pay_status = 'completed' if order_status == 'completed' else (
-        'cancelled' if order_status == 'cancelled' else random.choice(['completed', 'cancelled'])
-    )
-    
+    pay_status = 'completed' if order_status == 'completed' else ('cancelled' if order_status == 'cancelled' else random.choice(['completed', 'cancelled']))
+
     payment = Payment(
         shop_id=shop.shop_id, order_id=order_id, paid_at=ordered_at,
         payment_method=pay_method, payment_status=pay_status, amount=total
     )
     
     return order, order_items, payment
-
-def generate_transactions_with_poisson(
-    order_id_counter: int,
-    shop: CoffeeShop,
-    shop_products: List[Product],
-    shop_state: ShopStateTracker,
-    total_employees: int,
-    max_days: Optional[int] = None
-) -> Tuple[List[Orders], List[OrderItem], List[Payment], int]:
-    """
-    Generate transactions using Poisson arrival process for realistic timing
-    """
-    all_orders = []
-    all_items = []
-    all_payments = []
-    
-    # Determine number of days to generate
-    if max_days is None:
-        days_open = (date.today() - shop.shop_opened_at).days
-    else:
-        days_open = max_days
-    
-    if days_open <= 0:
-        days_open = 30
-    
-    print(f"   Shop {shop.shop_id} ({shop.shop_name}): Generating {days_open} days with Poisson arrivals...")
-    
-    for day in range(days_open):
-        current_date = shop.shop_opened_at + timedelta(days=day)
-        
-        if current_date > date.today():
-            break
-        
-        # Advance shop state
-        actual_orders, avg_ticket, state_multiplier = shop_state.advance_day()
-        
-        # Generate Poisson arrival times for this day
-        arrival_times = shop_state.generate_arrivals_for_day(current_date)
-        
-        # Limit to expected number of orders (trim or expand)
-        if len(arrival_times) > actual_orders:
-            # Keep only first N arrivals (or randomly sample)
-            arrival_times = random.sample(arrival_times, actual_orders)
-        elif len(arrival_times) < actual_orders:
-            # Generate additional orders at random times
-            extra_needed = actual_orders - len(arrival_times)
-            opening_hour = shop_state.opening_hour
-            closing_hour = shop_state.closing_hour
-            for _ in range(extra_needed):
-                hour = random.randint(opening_hour, closing_hour - 1)
-                minute = random.randint(0, 59)
-                second = random.randint(0, 59)
-                extra_time = datetime.combine(current_date, time(hour, minute, second))
-                arrival_times.append(extra_time)
-        
-        # Sort arrivals chronologically
-        arrival_times.sort()
-        
-        # Generate transaction for each arrival
-        for arrival_time in arrival_times:
-            transaction = generate_single_transaction(
-                order_id_counter,
-                shop,
-                shop_products,
-                total_employees,
-                arrival_time,
-                avg_ticket,
-                shop_state.markov.current_state
-            )
-            
-            if transaction:
-                order, items, payment = transaction
-                all_orders.append(order)
-                all_items.extend(items)
-                all_payments.append(payment)
-                order_id_counter += 1
-    
-    return all_orders, all_items, all_payments, order_id_counter
-
 
 if __name__ == "__main__":
     user_input = input("Enter the number of NEW coffee shops you want to generate: ").strip()
@@ -1355,6 +485,7 @@ if __name__ == "__main__":
         cursor = conn.cursor()
         print("\nChecking database for existing records to prevent duplicates...")
 
+        # 1. Track existing unique attributes globally
         cursor.execute("SELECT shop_name FROM CoffeeShop;")
         for row in cursor.fetchall():
             generated_shop_names.add(row[0])
@@ -1367,6 +498,7 @@ if __name__ == "__main__":
         for row in cursor.fetchall():
             existing_address_strings.add(row[0])
 
+        # 2. Sync starting IDs
         cursor.execute("SELECT COALESCE(MAX(shop_id), 0) FROM CoffeeShop;")
         start_shop_id = cursor.fetchone()[0] + 1
         
@@ -1379,33 +511,25 @@ if __name__ == "__main__":
         print(f"-> Found {start_shop_id - 1} existing shops. Starting shop_id: {start_shop_id}, order_id: {order_id_counter}.")
 
     except Exception as error:
-        print("\n Failed to sync pre-existing database constraints:", error)
+        print("\n❌ Failed to sync pre-existing database constraints:", error)
         if conn: conn.close()
         exit(1)
 
-    # Configuration
-    CHUNK_SIZE = 5  # Smaller chunks due to complex generation with shocks
+    # --- CHUNKED EXECUTION CORE ---
+    CHUNK_SIZE = 50  # Keeps RAM incredibly low by clearing memory after every 50 shops
     total_processed = 0
-    all_shock_log = []  # Track all shocks across all shops
     
-    print(f"\n🚀 Streaming data generation with:")
-    print(f"   • Poisson arrival processes (realistic customer timing)")
-    print(f"   • Random walks (day-to-day trends and momentum)")
-    print(f"   • Markov chains (business cycles: booming/normal/slow/struggling)")
-    print(f"   • Stochastic shocks (unexpected macro events)")
-    print(f"   • Chunk size: {CHUNK_SIZE} shops per batch\n")
+    print(f"\n🚀 Streaming data generation in chunks of {CHUNK_SIZE} shops...")
     
     try:
         for chunk_start in range(start_shop_id, start_shop_id + num_shops, CHUNK_SIZE):
             chunk_end = min(chunk_start + CHUNK_SIZE, start_shop_id + num_shops)
-            print(f"\n{'='*60}")
             print(f"Processing shops {chunk_start} to {chunk_end - 1}...")
-            print(f"{'='*60}")
             
-            # Generate shops
+            # Generate ONLY this chunk's shops in memory
             shops = [generate_coffee_shop(i) for i in range(chunk_start, chunk_end)]
             
-            # --- INSERT COFFEE SHOPS ---
+            # --- INSERT COFFEE SHOPS FOR THIS CHUNK ---
             shop_id_map = {}
             for s in shops:
                 hours_json = json.dumps([{"open": h[0].strftime('%H:%M'), "close": h[1].strftime('%H:%M')} for h in s.operating_hours])
@@ -1415,7 +539,7 @@ if __name__ == "__main__":
                 """, (s.shop_name, s.shop_address.to_string(), s.shop_phone, s.shop_opened_at, hours_json, s.shop_markup_multiplier))
                 shop_id_map[s.shop_id] = cursor.fetchone()[0]
 
-            # Generate employees and products
+            # Generate child objects ONLY for this chunk
             chunk_employees = []
             employees_by_shop = {}
             products_by_shop = {}
@@ -1428,7 +552,7 @@ if __name__ == "__main__":
                 active_employees = [e for e in employees if e.employee_current_status == 'active']
                 products_by_shop[shop.shop_id] = generate_shop_products(shop, len(active_employees))
 
-            # --- INSERT EMPLOYEES ---
+            # --- INSERT EMPLOYEES FOR THIS CHUNK ---
             employee_id_map = {}
             emp_records = []
             emp_lookup = []
@@ -1449,7 +573,7 @@ if __name__ == "__main__":
             for lookup_key, res_row in zip(emp_lookup, inserted_emp_ids):
                 employee_id_map[lookup_key] = res_row[0]
 
-            # --- INSERT PRODUCTS ---
+            # --- INSERT PRODUCTS FOR THIS CHUNK ---
             product_id_map = {}
             prod_records = []
             prod_lookup = []
@@ -1469,217 +593,79 @@ if __name__ == "__main__":
             for lookup_key, res_row in zip(prod_lookup, inserted_prod_ids):
                 product_id_map[lookup_key] = res_row[0]
 
-            # --- GENERATE TRANSACTIONS WITH ALL FEATURES ---
+            # Generate Transactions ONLY for this chunk
             chunk_orders = []
             chunk_items = []
             chunk_payments = []
-            chunk_shock_log = []
             
-            shop_summaries = []
-            
-            for shop_idx, shop in enumerate(shops):
-                print(f"\nShop {shop.shop_id}: {shop.shop_name}")
-                print(f" {shop.shop_address.district}, {shop.shop_address.city}")
-                print(f" Opened: {shop.shop_opened_at.strftime('%Y-%m-%d')}")
-                
+            for shop in shops:
                 shop_products = products_by_shop[shop.shop_id]
                 active_staff_count = len([e for e in employees_by_shop[shop.shop_id] if e.employee_current_status == 'active'])
+                days_open = (date.today() - shop.shop_opened_at).days
+                order_rate = random.uniform(0.1, 0.4)
+                num_orders = max(5, int(days_open * order_rate))
                 
-                # Extract opening and closing hours
-                if shop.operating_hours:
-                    opening_hour = shop.operating_hours[0][0].hour
-                    closing_hour = shop.operating_hours[0][1].hour
-                else:
-                    opening_hour = 8
-                    closing_hour = 22
-                
-                # Initialize shop state with all features
-                shop_state = ShopStateTracker(
-                    shop.shop_id,
-                    opening_hour=opening_hour,
-                    closing_hour=closing_hour
-                )
-                
-                # Store available products for shock targeting
-                shop_state.available_products = [p.product_name for p in shop_products]
-                
-                # Generate transactions with all features
-                orders, items, payments, order_id_counter, shock_log = generate_transactions_with_shocks(
-                    order_id_counter,
-                    shop,
-                    shop_products,
-                    shop_state,
-                    active_staff_count,
-                    max_days=None
-                )
-                
-                chunk_orders.extend(orders)
-                chunk_items.extend(items)
-                chunk_payments.extend(payments)
-                chunk_shock_log.extend(shock_log)
-                
-                # Calculate summary statistics
-                if len(orders) > 0:
-                    total_revenue = sum(o.order_total for o in orders)
-                    avg_order_value = total_revenue / len(orders) if orders else 0
-                    days_active = shop_state.day_counter
-                    
-                    # Count orders by day (approximate)
-                    order_days = {}
-                    for order in orders:
-                        order_date = order.ordered_at.date()
-                        order_days[order_date] = order_days.get(order_date, 0) + 1
-                    
-                    avg_daily_orders = len(orders) / max(1, days_active)
-                    
-                    shop_summaries.append({
-                        'shop_id': shop.shop_id,
-                        'name': shop.shop_name,
-                        'days_active': days_active,
-                        'total_orders': len(orders),
-                        'avg_daily_orders': avg_daily_orders,
-                        'total_revenue': total_revenue,
-                        'avg_order_value': avg_order_value,
-                        'shocks': len(shock_log)
-                    })
-                    
-                    print(f"Generated {len(orders)} orders over {days_active} days")
-                    print(f"         Avg daily: {avg_daily_orders:.1f} orders/day")
-                    print(f"         Total revenue: ₺{total_revenue:,.2f}")
-                    print(f"         Avg order: ₺{avg_order_value:.2f}")
-                    print(f"         ⚡ Shocks: {len(shock_log)} events")
-                    
-                    # Show shock summary if any
-                    if shock_log:
-                        print(f"         🚨 Recent shocks:")
-                        for shock in shock_log[-3:]:  # Show last 3 shocks
-                            print(f"            • {shock['date'].strftime('%Y-%m-%d')}: {shock['description']}")
-                else:
-                    print(f"No orders generated (shop may have just opened)")
+                for _ in range(num_orders):
+                    transaction = generate_single_transaction(order_id_counter, shop, shop_products, active_staff_count)
+                    if transaction:
+                        order, items, payment = transaction
+                        chunk_orders.append(order)
+                        chunk_items.extend(items)
+                        chunk_payments.append(payment)
+                        order_id_counter += 1
 
-            # --- INSERT ORDERS ---
-            if chunk_orders:
-                print(f"\n  💾 Inserting {len(chunk_orders)} orders into database...")
+            # --- INSERT ORDERS FOR THIS CHUNK ---
+            order_id_map = {}
+            order_records = []
+            order_lookup = []
+            shop_to_employees_cache = {}
+            for (s_id, _), emp_id in employee_id_map.items():
+                shop_to_employees_cache.setdefault(s_id, []).append(emp_id)
+
+            for order in chunk_orders:
+                db_shop_id = shop_id_map[order.shop_id]
+                shop_emp_pool = shop_to_employees_cache.get(order.shop_id)
+                assigned_emp_id = random.choice(shop_emp_pool) if shop_emp_pool else None
+                order_records.append((
+                    db_shop_id, assigned_emp_id, order.ordered_at, order.order_status,
+                    order.order_subtotal, order.order_tax, order.order_total
+                ))
+                order_lookup.append(order.order_id)
                 
-                order_id_map = {}
-                order_records = []
-                order_lookup = []
-                shop_to_employees_cache = {}
-                for (s_id, _), emp_id in employee_id_map.items():
-                    shop_to_employees_cache.setdefault(s_id, []).append(emp_id)
+            inserted_order_ids = execute_values(
+                cursor,
+                """INSERT INTO Orders (shop_id, employee_id, ordered_at, order_status, order_subtotal, order_tax, order_total) 
+                   VALUES %s RETURNING order_id;""", order_records, fetch=True
+            )
+            for old_id, res_row in zip(order_lookup, inserted_order_ids):
+                order_id_map[old_id] = res_row[0]
 
-                for order in chunk_orders:
-                    db_shop_id = shop_id_map[order.shop_id]
-                    shop_emp_pool = shop_to_employees_cache.get(order.shop_id)
-                    assigned_emp_id = random.choice(shop_emp_pool) if shop_emp_pool else None
-                    order_records.append((
-                        db_shop_id, assigned_emp_id, order.ordered_at, order.order_status,
-                        order.order_subtotal, order.order_tax, order.order_total
-                    ))
-                    order_lookup.append(order.order_id)
-                    
-                inserted_order_ids = execute_values(
-                    cursor,
-                    """INSERT INTO Orders (shop_id, employee_id, ordered_at, order_status, order_subtotal, order_tax, order_total) 
-                       VALUES %s RETURNING order_id;""", order_records, fetch=True
-                )
-                for old_id, res_row in zip(order_lookup, inserted_order_ids):
-                    order_id_map[old_id] = res_row[0]
+            # --- INSERT ORDER ITEMS FOR THIS CHUNK ---
+            item_records = []
+            for item in chunk_items:
+                item_records.append((
+                    shop_id_map[item.shop_id], order_id_map[item.order_id], product_id_map[(item.shop_id, item.product_id)], item.quantity, item.unit_price
+                ))
+            execute_values(cursor, "INSERT INTO OrderItem (shop_id, order_id, product_id, quantity, unit_price) VALUES %s;", item_records)
 
-                # --- INSERT ORDER ITEMS ---
-                print(f"Inserting {len(chunk_items)} order items...")
-                item_records = []
-                for item in chunk_items:
-                    item_records.append((
-                        shop_id_map[item.shop_id], order_id_map[item.order_id], 
-                        product_id_map[(item.shop_id, item.product_id)], item.quantity, item.unit_price
-                    ))
-                execute_values(cursor, "INSERT INTO OrderItem (shop_id, order_id, product_id, quantity, unit_price) VALUES %s;", item_records)
+            # --- INSERT PAYMENTS FOR THIS CHUNK ---
+            pay_records = []
+            for pay in chunk_payments:
+                pay_records.append((
+                    shop_id_map[pay.shop_id], order_id_map[pay.order_id], pay.paid_at, pay.payment_method, pay.payment_status, pay.amount
+                ))
+            execute_values(cursor, "INSERT INTO Payment (shop_id, order_id, paid_at, payment_method, payment_status, payment_amount) VALUES %s;", pay_records)
 
-                # --- INSERT PAYMENTS ---
-                print(f"Inserting {len(chunk_payments)} payments...")
-                pay_records = []
-                for pay in chunk_payments:
-                    pay_records.append((
-                        shop_id_map[pay.shop_id], order_id_map[pay.order_id], 
-                        pay.paid_at, pay.payment_method, pay.payment_status, pay.amount
-                    ))
-                execute_values(cursor, "INSERT INTO Payment (shop_id, order_id, paid_at, payment_method, payment_status, payment_amount) VALUES %s;", pay_records)
-                
-                # --- INSERT SHOCK LOG (Optional: If you want to track shocks in DB) ---
-                # You could create a ShockLog table and insert here
-            
-            # Commit this chunk
+            # Intermediate periodic commit to secure data to disk and free DB transaction memory
             conn.commit()
             total_processed += len(shops)
-            all_shock_log.extend(chunk_shock_log)
-            
-            # Print chunk summary
-            print(f"\n{'─'*60}")
-            print(f"Chunk complete: {total_processed}/{num_shops} shops processed")
-            print(f"   Total orders in chunk: {len(chunk_orders)}")
-            print(f"   Total shocks in chunk: {len(chunk_shock_log)}")
-            print(f"{'─'*60}")
+            print(f"   -> Progress: Completed {total_processed}/{num_shops} shops cleanly.")
 
-        # --- FINAL SUMMARY ---
-        print(f"\n{'='*60}")
-        print(f"🎉 GRAND SUCCESS! All {num_shops} shops processed!")
-        print(f"{'='*60}")
-        
-        # Print overall statistics
-        total_orders = 0
-        total_revenue = 0
-        total_shocks = len(all_shock_log)
-        
-        for summary in shop_summaries:
-            total_orders += summary['total_orders']
-            total_revenue += summary['total_revenue']
-        
-        print(f" OVERALL STATISTICS:")
-        print(f"   • Shops generated: {num_shops}")
-        print(f"   • Total orders: {total_orders:,}")
-        print(f"   • Total revenue: ₺{total_revenue:,.2f}")
-        print(f"   • Average orders per shop: {total_orders/num_shops:.1f}")
-        print(f"   • Average revenue per shop: ₺{total_revenue/num_shops:,.2f}")
-        print(f"   • Total stochastic shocks: {total_shocks}")
-        print(f"   • Average shocks per shop: {total_shocks/num_shops:.1f}")
-        
-        # Print shock type breakdown
-        if all_shock_log:
-            from collections import Counter
-            shock_types = Counter([s['shock_type'] for s in all_shock_log])
-          
-            for shock_type, count in shock_types.most_common():
-                print(f"   • {shock_type}: {count} events")
-        
-        # Print shop with most orders
-        if shop_summaries:
-            best_shop = max(shop_summaries, key=lambda x: x['total_orders'])
-            print(f" TOP PERFORMING SHOP:")
-            print(f"   • {best_shop['name']} (ID: {best_shop['shop_id']})")
-            print(f"   • {best_shop['total_orders']} orders over {best_shop['days_active']} days")
-            print(f"   • Average {best_shop['avg_daily_orders']:.1f} orders/day")
-            print(f"   • Revenue: ₺{best_shop['total_revenue']:,.2f}")
-            
-            # Shop with most shocks
-            most_shocked = max(shop_summaries, key=lambda x: x['shocks'])
-            if most_shocked['shocks'] > 0:
-                print(f"\n⚡ MOST IMPACTED BY SHOCKS:")
-                print(f"   • {most_shocked['name']} (ID: {most_shocked['shop_id']})")
-                print(f"   • {most_shocked['shocks']} shock events")
-        
-        print(f"\nDatabase connection closed. All data committed successfully!")
+        print(f"\n🎉 Grand Success! All {num_shops} shops (and millions of dependent rows) fully written to database!")
 
     except Exception as error:
-        print(f"\n Error during execution chunk loop: {error}")
-        if conn: 
-            conn.rollback()
-            print(" Transaction rolled back")
-        import traceback
-        traceback.print_exc()
+        print("\n❌ Error during execution chunk loop:", error)
+        if conn: conn.rollback()
     finally:
-        if cursor: 
-            cursor.close()
-        if conn: 
-            conn.close()
-            print("Database connection successfully closed")
+        if cursor: cursor.close()
+        if conn: conn.close()
